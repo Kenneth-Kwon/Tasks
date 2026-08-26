@@ -85,23 +85,24 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
         const res = await fetch("/api/tasks/sync-google", { method: "POST" });
         if (res.ok) {
           lastSyncRef.current = new Date();
+          // 동기화 완료 후 잠시 대기 후 Task 목록 및 점수 갱신
+          await new Promise((r) => setTimeout(r, 1000));
           await handleSynced();
         }
       } catch { /* 자동 동기화 실패 무시 */ }
     };
 
-    // 페이지 첫 로드 시 즉시 1회 실행
-    runSync();
-
+    // 첫 로드 시 3초 후 실행 (점수/UI 로드 우선)
+    const initialDelay = setTimeout(runSync, 3000);
     const timer = setInterval(runSync, AUTO_SYNC_INTERVAL);
-    return () => clearInterval(timer);
+    return () => { clearTimeout(initialDelay); clearInterval(timer); };
   }, [handleSynced]);
 
   return (
     <>
       {/* 생산성 점수 */}
-      <div key={scoreKey} className="mb-4">
-        <ScoreWidget />
+      <div className="mb-4">
+        <ScoreWidget refreshTrigger={scoreKey} />
       </div>
 
       {/* 상단 액션 바 */}

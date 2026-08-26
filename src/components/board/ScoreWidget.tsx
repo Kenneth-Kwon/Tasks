@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react";
 import type { ScoreResult } from "@/lib/score";
 
@@ -19,32 +19,57 @@ const GRADE_BG: Record<string, string> = {
   D: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",
 };
 
-export function ScoreWidget() {
+interface ScoreWidgetProps {
+  refreshTrigger?: number;
+}
+
+export function ScoreWidget({ refreshTrigger = 0 }: ScoreWidgetProps) {
   const [data, setData] = useState<ScoreResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const fetchedOnce = useRef(false);
 
   async function fetchScore() {
-    setLoading(true);
+    if (!fetchedOnce.current) setLoading(true);
+    setError(false);
     try {
-      const res = await fetch("/api/score");
-      if (res.ok) setData(await res.json());
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch("/api/score", { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok) {
+        setData(await res.json());
+        fetchedOnce.current = true;
+      } else {
+        setError(true);
+      }
+    } catch {
+      setError(true);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { fetchScore(); }, []);
+  useEffect(() => { fetchScore(); }, [refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 animate-pulse">
-        <div className="h-4 w-24 bg-slate-200 dark:bg-slate-700 rounded mb-2" />
-        <div className="h-8 w-16 bg-slate-200 dark:bg-slate-700 rounded" />
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
+        <p className="text-sm text-slate-400">점수 계산 중...</p>
       </div>
     );
   }
 
-  if (!data) return null;
+  if (error || !data) {
+    return (
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between">
+        <p className="text-sm text-slate-400">점수를 불러올 수 없습니다.</p>
+        <button onClick={fetchScore} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400">
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
 
   const TrendIcon = data.weeklyTrend === "up" ? TrendingUp
     : data.weeklyTrend === "down" ? TrendingDown : Minus;

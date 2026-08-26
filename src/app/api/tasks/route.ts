@@ -10,6 +10,7 @@ const CreateTaskSchema = z.object({
   description: z.string().max(2000).optional(),
   importanceScore: z.number().int().min(1).max(10),
   dueDate: z.string().datetime().optional().nullable(),
+  googleListId: z.string().optional().nullable(),
 });
 
 export async function GET() {
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid input", details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { title, description, importanceScore, dueDate } = parsed.data;
+  const { title, description, importanceScore, dueDate, googleListId } = parsed.data;
   const parsedDueDate = dueDate ? new Date(dueDate) : null;
   const urgencyScore = calcUrgencyScore(parsedDueDate);
   const quadrant = calcQuadrant(importanceScore, urgencyScore);
@@ -60,18 +61,37 @@ export async function POST(req: NextRequest) {
   // Google Tasks 자동 반영
   try {
     const tasksClient = await getGoogleClient(session.user.id);
-    const listsRes = await tasksClient.tasklists.list({ maxResults: 1 });
-    const listId = listsRes.data.items?.[0]?.id ?? "@default";
+
+    let targetListId = googleListId ?? null;
+
+    // 목록 ID가 없으면 "기타" 목록 자동 탐색
+    if (!targetListId) {
+      const listsRes = await tasksClient.tasklists.list({ maxResults: 20 });
+      const lists = listsRes.data.items ?? [];
+      const kita = lists.find((l) =>
+        ["기타", "Other", "other", "기타 (Other)"].includes(l.title ?? "")
+      );
+      if (!kita) {
+        // "기타" 목록 없음 — Task는 저장됐으나 Google 미반영
+        return NextResponse.json(
+          { ...task, googleError: '"기타" Google Task 목록이 존재하지 않습니다.' },
+          { status: 201 }
+        );
+      }
+      targetListId = kita.id!;
+    }
+
     const created = await tasksClient.tasks.insert({
-      tasklist: listId,
+      tasklist: targetListId,
       requestBody: { title, notes: description ?? undefined, due: toGoogleDue(parsedDueDate) },
     });
     if (created.data.id) {
       await db.task.update({
         where: { id: task.id },
-        data: { googleTaskId: created.data.id, googleListId: listId },
+        data: { googleTaskId: created.data.id, googleListId: targetListId },
       });
       task.googleTaskId = created.data.id;
+      task.googleListId = targetListId;
     }
   } catch { /* Google 연동 실패 무시 */ }
 

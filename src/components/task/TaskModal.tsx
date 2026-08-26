@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { calcUrgencyScore, calcQuadrant, QUADRANT_META } from "@/lib/quadrant";
 import type { TaskWithMeta } from "@/types";
 
+interface GoogleList {
+  id: string;
+  title: string;
+}
+
 interface TaskModalProps {
   open: boolean;
   onClose: () => void;
@@ -22,6 +27,7 @@ interface TaskModalProps {
     description: string;
     importanceScore: number;
     dueDate: string | null;
+    googleListId?: string | null;
   }) => Promise<void>;
   task?: TaskWithMeta | null;
 }
@@ -36,6 +42,32 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
     task?.dueDate ? task.dueDate.slice(0, 10) : ""
   );
   const [saving, setSaving] = useState(false);
+
+  // Google 목록 관련
+  const [googleLists, setGoogleLists] = useState<GoogleList[]>([]);
+  const [selectedListId, setSelectedListId] = useState<string>("");
+  const [listsLoading, setListsLoading] = useState(false);
+
+  const isNew = !task;
+
+  // 새 Task 추가 모달이 열릴 때 Google 목록 로드
+  useEffect(() => {
+    if (open && isNew) {
+      setListsLoading(true);
+      fetch("/api/google-lists")
+        .then((r) => r.json())
+        .then((lists: GoogleList[]) => {
+          setGoogleLists(lists);
+          // "기타" 목록을 기본값으로 설정
+          const kita = lists.find((l) =>
+            ["기타", "Other", "other", "기타 (Other)"].includes(l.title)
+          );
+          setSelectedListId(kita?.id ?? lists[0]?.id ?? "");
+        })
+        .catch(() => setGoogleLists([]))
+        .finally(() => setListsLoading(false));
+    }
+  }, [open, isNew]);
 
   const dueDateObj = dueDate ? new Date(dueDate + "T00:00:00") : null;
   const urgency = calcUrgencyScore(dueDateObj);
@@ -52,6 +84,7 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
         description: description.trim(),
         importanceScore,
         dueDate: dueDate ? new Date(dueDate + "T00:00:00").toISOString() : null,
+        googleListId: isNew ? (selectedListId || null) : undefined,
       });
       onClose();
     } finally {
@@ -123,6 +156,33 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
               onChange={(e) => setDueDate(e.target.value)}
             />
           </div>
+
+          {/* Google Task 목록 선택 (새 Task만) */}
+          {isNew && (
+            <div className="space-y-1.5">
+              <Label htmlFor="glist">Google Task 목록</Label>
+              {listsLoading ? (
+                <p className="text-xs text-slate-400">목록 불러오는 중...</p>
+              ) : googleLists.length === 0 ? (
+                <p className="text-xs text-slate-400">
+                  Google Task 목록을 불러올 수 없습니다.
+                </p>
+              ) : (
+                <select
+                  id="glist"
+                  value={selectedListId}
+                  onChange={(e) => setSelectedListId(e.target.value)}
+                  className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  {googleLists.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
           {/* 사분면 미리보기 */}
           <div

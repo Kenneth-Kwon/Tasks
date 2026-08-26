@@ -29,7 +29,7 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   const handleEdit = useCallback((task: TaskWithMeta) => { setEditingTask(task); setModalOpen(true); }, []);
 
   const handleSave = async (data: {
-    title: string; description: string; importanceScore: number; dueDate: string | null;
+    title: string; description: string; importanceScore: number; dueDate: string | null; googleListId?: string | null;
   }) => {
     if (editingTask) {
       const res = await fetch(`/api/tasks/${editingTask.id}`, {
@@ -44,8 +44,11 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
       });
       if (res.ok) {
-        const created: TaskWithMeta = await res.json();
+        const created: TaskWithMeta & { googleError?: string } = await res.json();
         setTasks((prev) => [...prev, created]);
+        if (created.googleError) {
+          alert(created.googleError);
+        }
       }
     }
     setScoreKey((k) => k + 1);

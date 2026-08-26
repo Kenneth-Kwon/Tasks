@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import {
-  calcUrgencyScore,
-  calcQuadrant,
-  calcPriorityRank,
-} from "@/lib/quadrant";
+import { calcUrgencyScore, calcQuadrant, calcPriorityRank } from "@/lib/quadrant";
+import { getGoogleClient, toGoogleDue } from "@/lib/google-tasks";
 import { z } from "zod";
 
 const UpdateTaskSchema = z.object({
@@ -25,34 +22,21 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
   const existing = await getTaskForUser(id, session.user.id);
-  if (!existing) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await req.json();
   const parsed = UpdateTaskSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid input", details: parsed.error.flatten() },
-      { status: 400 }
-    );
-  }
+  if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
 
   const { title, description, importanceScore, dueDate, status } = parsed.data;
-
   const newImportance = importanceScore ?? existing.importanceScore;
-  const newDueDate =
-    dueDate !== undefined
-      ? dueDate
-        ? new Date(dueDate)
-        : null
-      : existing.dueDate;
+  const newDueDate = dueDate !== undefined
+    ? (dueDate ? new Date(dueDate) : null)
+    : existing.dueDate;
 
   const urgencyScore = calcUrgencyScore(newDueDate);
   const quadrant = calcQuadrant(newImportance, urgencyScore);
@@ -72,6 +56,23 @@ export async function PATCH(
     },
   });
 
+  // Google Tasks 자동 반영
+  if (existing.googleTaskId && existing.googleListId) {
+    try {
+      const tasksClient = await getGoogleClient(session.user.id);
+      await tasksClient.tasks.patch({
+        tasklist: existing.googleListId,
+        task: existing.googleTaskId,
+        requestBody: {
+          title: task.title,
+          notes: task.description ?? undefined,
+          due: toGoogleDue(task.dueDate),
+          status: task.status === "DONE" ? "completed" : "needsAction",
+        },
+      });
+    } catch { /* 무시 */ }
+  }
+
   return NextResponse.json(task);
 }
 
@@ -80,14 +81,21 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
   const existing = await getTaskForUser(id, session.user.id);
-  if (!existing) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Google Tasks에서도 삭제
+  if (existing.googleTaskId && existing.googleListId) {
+    try {
+      const tasksClient = await getGoogleClient(session.user.id);
+      await tasksClient.tasks.delete({
+        tasklist: existing.googleListId,
+        task: existing.googleTaskId,
+      });
+    } catch { /* 무시 */ }
   }
 
   await db.task.delete({ where: { id } });

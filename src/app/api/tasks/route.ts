@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import {
-  calcUrgencyScore,
-  calcQuadrant,
-  calcPriorityRank,
-} from "@/lib/quadrant";
+import { calcUrgencyScore, calcQuadrant, calcPriorityRank } from "@/lib/quadrant";
+import { getGoogleClient, toGoogleDue } from "@/lib/google-tasks";
 import { z } from "zod";
 
 const CreateTaskSchema = z.object({
@@ -22,7 +19,7 @@ export async function GET() {
   }
 
   const tasks = await db.task.findMany({
-    where: { userId: session.user.id, status: { not: "DONE" } },
+    where: { userId: session.user.id },
     orderBy: [{ quadrant: "asc" }, { priorityRank: "desc" }],
   });
 
@@ -38,10 +35,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const parsed = CreateTaskSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid input", details: parsed.error.flatten() },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Invalid input", details: parsed.error.flatten() }, { status: 400 });
   }
 
   const { title, description, importanceScore, dueDate } = parsed.data;
@@ -62,6 +56,24 @@ export async function POST(req: NextRequest) {
       dueDate: parsedDueDate,
     },
   });
+
+  // Google Tasks 자동 반영
+  try {
+    const tasksClient = await getGoogleClient(session.user.id);
+    const listsRes = await tasksClient.tasklists.list({ maxResults: 1 });
+    const listId = listsRes.data.items?.[0]?.id ?? "@default";
+    const created = await tasksClient.tasks.insert({
+      tasklist: listId,
+      requestBody: { title, notes: description ?? undefined, due: toGoogleDue(parsedDueDate) },
+    });
+    if (created.data.id) {
+      await db.task.update({
+        where: { id: task.id },
+        data: { googleTaskId: created.data.id, googleListId: listId },
+      });
+      task.googleTaskId = created.data.id;
+    }
+  } catch { /* Google 연동 실패 무시 */ }
 
   return NextResponse.json(task, { status: 201 });
 }

@@ -2,7 +2,8 @@ import { auth, signOut } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { QuadrantBoard } from "@/components/board/QuadrantBoard";
-import { Plus, LogOut, RefreshCcw } from "lucide-react";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { LogOut, RefreshCcw } from "lucide-react";
 import type { TaskWithMeta } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -74,7 +75,8 @@ export default async function HomePage() {
           </div>
 
           {/* 사용자 */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <ThemeToggle />
             {session.user.image && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -131,10 +133,10 @@ export default async function HomePage() {
           </h3>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
-              { q: "Q1", color: "bg-red-500", desc: "중요도 ≥7 + 긴급도 ≥7 → 즉시 처리" },
-              { q: "Q2", color: "bg-blue-500", desc: "중요도 ≥7 + 긴급도 <7 → 핵심 투자" },
-              { q: "Q3", color: "bg-amber-500", desc: "중요도 <7 + 긴급도 ≥7 → 위임/거절" },
-              { q: "Q4", color: "bg-gray-400", desc: "중요도 <7 + 긴급도 <7 → 제거" },
+              { q: "Q2", color: "bg-blue-500", desc: "중요도 ≥7 + 긴급도 <7 → 핵심 투자 (좌상단)" },
+              { q: "Q1", color: "bg-red-500", desc: "중요도 ≥7 + 긴급도 ≥7 → 즉시 처리 (우상단)" },
+              { q: "Q4", color: "bg-gray-400", desc: "중요도 <7 + 긴급도 <7 → 제거 (좌하단)" },
+              { q: "Q3", color: "bg-amber-500", desc: "중요도 <7 + 긴급도 ≥7 → 위임/거절 (우하단)" },
             ].map((item) => (
               <div key={item.q} className="flex items-start gap-2">
                 <div className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${item.color}`} />

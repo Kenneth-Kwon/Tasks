@@ -1,5 +1,4 @@
 "use client";
-import { Plus } from "lucide-react";
 import { TaskCard } from "./TaskCard";
 import { QUADRANT_META } from "@/lib/quadrant";
 import type { TaskWithMeta, Quadrant } from "@/types";
@@ -7,7 +6,6 @@ import type { TaskWithMeta, Quadrant } from "@/types";
 interface QuadrantColumnProps {
   quadrant: Quadrant;
   tasks: TaskWithMeta[];
-  onAdd: (quadrant: Quadrant) => void;
   onEdit: (task: TaskWithMeta) => void;
   onDelete: (id: string) => void;
   onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void;
@@ -16,7 +14,6 @@ interface QuadrantColumnProps {
 export function QuadrantColumn({
   quadrant,
   tasks,
-  onAdd,
   onEdit,
   onDelete,
   onStatusToggle,
@@ -78,16 +75,6 @@ export function QuadrantColumn({
         )}
       </div>
 
-      {/* 추가 버튼 */}
-      <div className="px-3 py-2 border-t border-slate-200/60 dark:border-slate-700/60">
-        <button
-          onClick={() => onAdd(quadrant)}
-          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100/80 dark:hover:bg-slate-800/60 hover:text-slate-700 transition-colors"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Task 추가
-        </button>
-      </div>
     </div>
   );
 }

@@ -11,7 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { calcUrgencyScore, calcQuadrant, QUADRANT_META } from "@/lib/quadrant";
+import { QUADRANT_META } from "@/lib/quadrant";
+import { calcQuadrantWithSettings, calcUrgencyWithSettings } from "@/lib/settings";
+import { useSettings } from "@/hooks/useSettings";
 import type { TaskWithMeta } from "@/types";
 
 interface GoogleList {
@@ -26,6 +28,7 @@ interface TaskModalProps {
     title: string;
     description: string;
     importanceScore: number;
+    urgencyScore: number;
     dueDate: string | null;
     googleListId?: string | null;
   }) => Promise<void>;
@@ -33,10 +36,14 @@ interface TaskModalProps {
 }
 
 export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
+  const { settings } = useSettings();
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
   const [importanceScore, setImportanceScore] = useState(
     task?.importanceScore ?? 5
+  );
+  const [urgencyScore, setUrgencyScore] = useState(
+    task?.urgencyScore ?? settings.noDateUrgency
   );
   const [dueDate, setDueDate] = useState(
     task?.dueDate ? task.dueDate.slice(0, 10) : ""
@@ -49,6 +56,16 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
   const [listsLoading, setListsLoading] = useState(false);
 
   const isNew = !task;
+
+  useEffect(() => {
+    if (!open) return;
+    setTitle(task?.title ?? "");
+    setDescription(task?.description ?? "");
+    setImportanceScore(task?.importanceScore ?? 5);
+    setUrgencyScore(task?.urgencyScore ?? settings.noDateUrgency);
+    setDueDate(task?.dueDate ? task.dueDate.slice(0, 10) : "");
+    setSaving(false);
+  }, [open, task, settings.noDateUrgency]);
 
   // 새 Task 추가 모달이 열릴 때 Google 목록 로드
   useEffect(() => {
@@ -70,9 +87,19 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
   }, [open, isNew]);
 
   const dueDateObj = dueDate ? new Date(dueDate + "T00:00:00") : null;
-  const urgency = calcUrgencyScore(dueDateObj);
-  const previewQuadrant = calcQuadrant(importanceScore, urgency);
+  const autoUrgency = dueDateObj
+    ? calcUrgencyWithSettings(dueDateObj, settings)
+    : null;
+  const urgency = autoUrgency ?? urgencyScore;
+  const previewQuadrant = calcQuadrantWithSettings(importanceScore, urgency, settings);
   const meta = QUADRANT_META[previewQuadrant];
+
+  function handleDueDateChange(value: string) {
+    setDueDate(value);
+    if (value) {
+      setUrgencyScore(calcUrgencyWithSettings(new Date(value + "T00:00:00"), settings));
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -83,6 +110,7 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
         title: title.trim(),
         description: description.trim(),
         importanceScore,
+        urgencyScore: urgency,
         dueDate: dueDate ? new Date(dueDate + "T00:00:00").toISOString() : null,
         googleListId: isNew ? (selectedListId || null) : undefined,
       });
@@ -153,8 +181,41 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
               id="due"
               type="date"
               value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
+              onChange={(e) => handleDueDateChange(e.target.value)}
             />
+            <p className="text-xs text-slate-400">
+              기한을 넣으면 긴급도가 규칙에 따라 자동 계산됩니다. 기한이 없어도 중요도는 1–10으로 바꿀 수 있습니다.
+            </p>
+          </div>
+
+          {/* 긴급도: 기한 있으면 자동, 없으면 직접 조절 */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>긴급도</Label>
+              <span className="text-sm font-semibold tabular-nums">
+                {urgency} / 10
+              </span>
+            </div>
+            {dueDate ? (
+              <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                기한 기준으로 자동 계산되었습니다. 중요도를 바꿔도 날짜는 그대로입니다.
+              </p>
+            ) : (
+              <>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={urgencyScore}
+                  onChange={(e) => setUrgencyScore(Number(e.target.value))}
+                  className="w-full accent-amber-500"
+                />
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>여유</span>
+                  <span>긴급</span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Google Task 목록 선택 (새 Task만) */}

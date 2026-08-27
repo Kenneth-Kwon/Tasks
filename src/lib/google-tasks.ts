@@ -43,7 +43,3 @@ export function toGoogleDue(date: Date | null): string | undefined {
   return d.toISOString();
 }
 
-/** 별표 여부 → 중요도 점수 */
-export function starredToImportance(starred: boolean): number {
-  return starred ? 9 : 5;
-}

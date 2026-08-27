@@ -1,4 +1,11 @@
-import type { Task, Quadrant } from "@prisma/client";
+import type { Quadrant, TaskStatus } from "@prisma/client";
+
+export type ScoreableTask = {
+  status: TaskStatus;
+  quadrant: Quadrant;
+  updatedAt: Date | string;
+  dueDate: Date | string | null;
+};
 
 /** 사분면별 완료 가중치 */
 const COMPLETE_WEIGHT: Record<Quadrant, number> = {
@@ -28,7 +35,7 @@ export interface ScoreResult {
   weeklyTrend: "up" | "down" | "stable";
 }
 
-export function calcScore(tasks: Task[]): ScoreResult {
+export function calcScore(tasks: ScoreableTask[]): ScoreResult {
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 

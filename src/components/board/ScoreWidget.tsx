@@ -1,7 +1,8 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
-import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react";
-import type { ScoreResult } from "@/lib/score";
+import { useMemo } from "react";
+import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { calcScore } from "@/lib/score";
+import type { TaskWithMeta } from "@/types";
 
 const GRADE_COLOR: Record<string, string> = {
   S: "text-violet-600 dark:text-violet-400",
@@ -20,56 +21,11 @@ const GRADE_BG: Record<string, string> = {
 };
 
 interface ScoreWidgetProps {
-  refreshTrigger?: number;
+  tasks: TaskWithMeta[];
 }
 
-export function ScoreWidget({ refreshTrigger = 0 }: ScoreWidgetProps) {
-  const [data, setData] = useState<ScoreResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const fetchedOnce = useRef(false);
-
-  async function fetchScore() {
-    if (!fetchedOnce.current) setLoading(true);
-    setError(false);
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch("/api/score", { signal: controller.signal });
-      clearTimeout(timeout);
-      if (res.ok) {
-        setData(await res.json());
-        fetchedOnce.current = true;
-      } else {
-        setError(true);
-      }
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { fetchScore(); }, [refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (loading) {
-    return (
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
-        <p className="text-sm text-slate-400">점수 계산 중...</p>
-      </div>
-    );
-  }
-
-  if (error || !data) {
-    return (
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between">
-        <p className="text-sm text-slate-400">점수를 불러올 수 없습니다.</p>
-        <button onClick={fetchScore} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400">
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    );
-  }
+export function ScoreWidget({ tasks }: ScoreWidgetProps) {
+  const data = useMemo(() => calcScore(tasks), [tasks]);
 
   const TrendIcon = data.weeklyTrend === "up" ? TrendingUp
     : data.weeklyTrend === "down" ? TrendingDown : Minus;
@@ -112,19 +68,8 @@ export function ScoreWidget({ refreshTrigger = 0 }: ScoreWidgetProps) {
         </div>
       </div>
 
-      {/* 팁 */}
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <p className="text-xs text-slate-500 dark:text-slate-400">{data.tip}</p>
-        <button
-          onClick={fetchScore}
-          className="shrink-0 p-1 rounded hover:bg-white/60 dark:hover:bg-slate-800/40 text-slate-400 transition-colors"
-          title="점수 새로고침"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
-      </div>
+      <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">{data.tip}</p>
 
-      {/* 포인트 상세 */}
       <div className="mt-2 flex items-center gap-3 text-xs text-slate-400">
         <span>+{data.earnedPoints}pt 획득</span>
         <span>·</span>

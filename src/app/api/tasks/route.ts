@@ -9,6 +9,7 @@ const CreateTaskSchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   importanceScore: z.number().int().min(1).max(10),
+  urgencyScore: z.number().int().min(1).max(10).optional(),
   dueDate: z.string().datetime().optional().nullable(),
   googleListId: z.string().optional().nullable(),
 });
@@ -39,9 +40,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid input", details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { title, description, importanceScore, dueDate, googleListId } = parsed.data;
+  const { title, description, importanceScore, urgencyScore: urgencyOverride, dueDate, googleListId } = parsed.data;
   const parsedDueDate = dueDate ? new Date(dueDate) : null;
-  const urgencyScore = calcUrgencyScore(parsedDueDate);
+  const urgencyScore = urgencyOverride ?? calcUrgencyScore(parsedDueDate);
   const quadrant = calcQuadrant(importanceScore, urgencyScore);
   const priorityRank = calcPriorityRank(importanceScore, urgencyScore);
 

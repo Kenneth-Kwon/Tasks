@@ -1,4 +1,8 @@
 "use client";
+import { useState } from "react";
+import { useDroppable } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { TaskCard } from "./TaskCard";
 import { QUADRANT_META } from "@/lib/quadrant";
 import type { TaskWithMeta, Quadrant } from "@/types";
@@ -11,19 +15,24 @@ interface QuadrantColumnProps {
   onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void;
 }
 
-export function QuadrantColumn({
-  quadrant,
-  tasks,
-  onEdit,
-  onDelete,
-  onStatusToggle,
-}: QuadrantColumnProps) {
+export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusToggle }: QuadrantColumnProps) {
   const meta = QUADRANT_META[quadrant];
   const pending = tasks.filter((t) => t.status !== "DONE");
   const done = tasks.filter((t) => t.status === "DONE");
+  const [showDone, setShowDone] = useState(false);
+
+  const { setNodeRef, isOver } = useDroppable({
+    id: quadrant,
+    data: { type: "column", quadrant },
+  });
+
+  const pendingIds = pending.map((t) => t.id);
 
   return (
-    <div className={`flex flex-col rounded-xl border-2 ${meta.borderColor} ${meta.bgColor} min-h-[300px]`}>
+    <div
+      ref={setNodeRef}
+      className={`flex flex-col rounded-xl border-2 ${meta.borderColor} ${meta.bgColor} min-h-[300px] transition-colors ${isOver ? "ring-2 ring-blue-400 ring-offset-1" : ""}`}
+    >
       {/* 헤더 */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200/60 dark:border-slate-700/60">
         <div className={`h-3 w-3 rounded-full ${meta.dotColor} shrink-0`} />
@@ -40,32 +49,45 @@ export function QuadrantColumn({
       </div>
 
       {/* Task 목록 */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 max-h-[480px]">
+      <div className="flex flex-1 flex-col gap-2 px-3 py-3">
         {pending.length === 0 && done.length === 0 && (
           <div className="flex flex-col items-center justify-center py-8 text-slate-400">
             <p className="text-xs">Task가 없습니다</p>
           </div>
         )}
-        {pending.map((task) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onStatusToggle={onStatusToggle}
-          />
-        ))}
+
+        <SortableContext items={pendingIds} strategy={verticalListSortingStrategy}>
+          {pending.map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              quadrant={quadrant}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onStatusToggle={onStatusToggle}
+            />
+          ))}
+        </SortableContext>
+
         {done.length > 0 && (
           <>
-            <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowDone((v) => !v)}
+              className="flex w-full items-center gap-2 pt-1 text-left"
+            >
               <div className="flex-1 border-t border-slate-200 dark:border-slate-700" />
-              <span className="text-xs text-slate-400">완료 {done.length}</span>
+              <span className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                {showDone ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                완료 {done.length}건
+              </span>
               <div className="flex-1 border-t border-slate-200 dark:border-slate-700" />
-            </div>
-            {done.map((task) => (
+            </button>
+            {showDone && done.map((task) => (
               <TaskCard
                 key={task.id}
                 task={task}
+                quadrant={quadrant}
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onStatusToggle={onStatusToggle}
@@ -74,7 +96,6 @@ export function QuadrantColumn({
           </>
         )}
       </div>
-
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { getGoogleClient, parseGoogleDue, toGoogleDue, starredToImportance } from "@/lib/google-tasks";
+import { getGoogleClient, parseGoogleDue, toGoogleDue } from "@/lib/google-tasks";
 import { calcUrgencyScore, calcQuadrant, calcPriorityRank } from "@/lib/quadrant";
 
 // 단일 사용자 동기화 로직
@@ -29,29 +29,30 @@ async function syncUser(userId: string) {
       if (gt.parent) continue; // 하위 항목 제외
 
       const dueDate = parseGoogleDue(gt.due);
-      const starred = gt.starred ?? false;
-      const importanceScore = starredToImportance(starred);
+      const defaultImportance = 5; // Google Tasks API는 별표 정보를 제공하지 않으므로 기본값 사용
       const urgencyScore = calcUrgencyScore(dueDate);
-      const quadrant = calcQuadrant(importanceScore, urgencyScore);
-      const priorityRank = calcPriorityRank(importanceScore, urgencyScore);
+      const quadrant = calcQuadrant(defaultImportance, urgencyScore);
+      const priorityRank = calcPriorityRank(defaultImportance, urgencyScore);
 
       const existing = await db.task.findFirst({
         where: { userId, googleTaskId: gt.id },
       });
 
       if (existing) {
-        const newImportance = existing.importanceScore !== 5
-          ? existing.importanceScore
-          : importanceScore;
+        const newImportance = existing.importanceScore;
+        const dueChanged =
+          (existing.dueDate?.getTime() ?? null) !== (dueDate?.getTime() ?? null);
+        const newUrgency = dueChanged ? calcUrgencyScore(dueDate) : existing.urgencyScore;
         await db.task.update({
           where: { id: existing.id },
           data: {
             title: gt.title,
             description: gt.notes ?? existing.description,
             dueDate,
-            urgencyScore: calcUrgencyScore(dueDate),
-            quadrant: calcQuadrant(newImportance, calcUrgencyScore(dueDate)),
-            priorityRank: calcPriorityRank(newImportance, calcUrgencyScore(dueDate)),
+            importanceScore: newImportance,
+            urgencyScore: newUrgency,
+            quadrant: calcQuadrant(newImportance, newUrgency),
+            priorityRank: calcPriorityRank(newImportance, newUrgency),
             status: "TODO",
             googleListId: listId,
           },
@@ -63,7 +64,7 @@ async function syncUser(userId: string) {
             userId,
             title: gt.title,
             description: gt.notes ?? null,
-            importanceScore,
+            importanceScore: defaultImportance,
             urgencyScore,
             quadrant,
             priorityRank,

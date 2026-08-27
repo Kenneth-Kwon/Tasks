@@ -23,6 +23,7 @@ export interface CreateTaskInput {
   title: string;
   description?: string;
   importanceScore: number;
+  urgencyScore?: number;
   dueDate?: string;
 }
 
@@ -30,6 +31,7 @@ export interface UpdateTaskInput {
   title?: string;
   description?: string;
   importanceScore?: number;
+  urgencyScore?: number;
   dueDate?: string;
   status?: TaskStatus;
 }

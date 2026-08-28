@@ -4,7 +4,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { format, isPast, isToday } from "date-fns";
 import { ko } from "date-fns/locale";
-import { MoreHorizontal, Pencil, Trash2, CheckCircle2, Circle, GripVertical } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, CheckCircle2, Circle, GripVertical, AlignLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Quadrant, TaskWithMeta } from "@/types";
 
@@ -16,16 +16,19 @@ interface TaskCardProps {
   onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void;
   /** 드래그 오버레이용 — true면 정적 렌더 */
   overlay?: boolean;
+  simple?: boolean;
 }
 
-export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, overlay }: TaskCardProps) {
+export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, overlay, simple }: TaskCardProps) {
   const isDone = task.status === "DONE";
   const dueDateObj = task.dueDate ? new Date(task.dueDate) : null;
   const isOverdue = !!(dueDateObj && !Number.isNaN(dueDateObj.getTime()) && isPast(dueDateObj) && !isToday(dueDateObj) && !isDone);
   const hasValidDue = !!(dueDateObj && !Number.isNaN(dueDateObj.getTime()));
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const hasDescription = !!(task.description && task.description.trim());
 
   const {
     attributes,
@@ -64,7 +67,8 @@ export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, ove
       ref={overlay ? undefined : setNodeRef}
       style={overlay ? undefined : style}
       className={cn(
-        "rounded-lg border bg-white p-3 shadow-sm transition-shadow hover:shadow-md dark:bg-slate-900",
+        "rounded-lg border bg-white shadow-sm transition-shadow hover:shadow-md dark:bg-slate-900",
+        simple ? "px-2 py-1.5" : "p-3",
         isDone && "opacity-60",
         "border-slate-200 dark:border-slate-700",
         isDragging && "opacity-30",
@@ -72,10 +76,10 @@ export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, ove
       )}
       {...(overlay || isDone ? {} : { ...attributes, ...listeners })}
     >
-      <div ref={cardRef} className="flex items-start gap-2">
+      <div ref={cardRef} className={cn("flex gap-2", simple ? "items-center" : "items-start")}>
         {!overlay && (
           <span
-            className="mt-0.5 shrink-0 text-slate-300 dark:text-slate-600"
+            className={cn("shrink-0 text-slate-300 dark:text-slate-600", !simple && "mt-0.5")}
             aria-hidden
           >
             <GripVertical className="h-4 w-4" />
@@ -87,7 +91,7 @@ export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, ove
           type="button"
           onPointerDown={stopDrag}
           onClick={() => onStatusToggle(task.id, isDone ? "TODO" : "DONE")}
-          className="mt-0.5 shrink-0 cursor-pointer text-slate-400 hover:text-blue-600 transition-colors"
+          className={cn("shrink-0 cursor-pointer text-slate-400 hover:text-blue-600 transition-colors", !simple && "mt-0.5")}
           title={isDone ? "미완료로 변경" : "완료 처리"}
         >
           {isDone ? <CheckCircle2 className="h-4 w-4 text-blue-500" /> : <Circle className="h-4 w-4" />}
@@ -95,12 +99,45 @@ export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, ove
 
         {/* 내용 */}
         <div className="min-w-0 flex-1">
+          {simple ? (
+            <div className="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                onPointerDown={stopDrag}
+                onClick={() => {
+                  if (hasDescription) setExpanded((v) => !v);
+                }}
+                className={cn(
+                  "min-w-0 flex-1 truncate text-left text-sm font-medium leading-tight",
+                  hasDescription && "cursor-pointer",
+                  isDone && "line-through text-slate-400"
+                )}
+              >
+                {task.title}
+              </button>
+              {hasDescription && (
+                <button
+                  type="button"
+                  onPointerDown={stopDrag}
+                  onClick={() => setExpanded((v) => !v)}
+                  className="shrink-0 cursor-pointer text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                  title="설명 보기"
+                  aria-label={expanded ? "설명 접기" : "설명 보기"}
+                  aria-expanded={expanded}
+                >
+                  <AlignLeft className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ) : (
           <p className={cn("text-sm font-medium leading-tight", isDone && "line-through text-slate-400")}>
             {task.title}
           </p>
-          {task.description && (
+          )}
+          {!simple && task.description && (
             <p className="mt-0.5 truncate text-xs text-slate-500">{task.description}</p>
           )}
+          {!simple && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
               중요 {task.importanceScore}
@@ -121,6 +158,7 @@ export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, ove
               </span>
             )}
           </div>
+          )}
         </div>
 
         {/* ... 버튼 */}
@@ -134,6 +172,12 @@ export function TaskCard({ task, quadrant, onEdit, onDelete, onStatusToggle, ove
           <MoreHorizontal className="h-4 w-4" />
         </button>
       </div>
+
+      {simple && expanded && hasDescription && (
+        <p className="mt-1.5 whitespace-pre-wrap break-words px-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+          {task.description}
+        </p>
+      )}
 
       {/* 인라인 메뉴 */}
       {menuOpen && (

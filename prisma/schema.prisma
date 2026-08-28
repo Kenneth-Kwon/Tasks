@@ -89,6 +89,7 @@ model Task {
   urgencyScore     Int        @default(5)
   quadrant         Quadrant   @default(Q2)
   priorityRank     Float      @default(0)
+  sortOrder        Float      @default(0)
   status           TaskStatus @default(TODO)
   dueDate          DateTime?
   googleTaskId     String?

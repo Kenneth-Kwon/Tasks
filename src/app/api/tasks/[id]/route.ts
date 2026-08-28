@@ -10,6 +10,7 @@ const UpdateTaskSchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   importanceScore: z.number().int().min(1).max(10).optional(),
   urgencyScore: z.number().int().min(1).max(10).optional(),
+  sortOrder: z.number().optional(),
   dueDate: z.string().datetime().optional().nullable(),
   status: z.enum(["TODO", "IN_PROGRESS", "DONE"]).optional(),
 });
@@ -33,7 +34,7 @@ export async function PATCH(
   const parsed = UpdateTaskSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
 
-  const { title, description, importanceScore, urgencyScore: urgencyOverride, dueDate, status } = parsed.data;
+  const { title, description, importanceScore, urgencyScore: urgencyOverride, sortOrder, dueDate, status } = parsed.data;
   const newImportance = importanceScore ?? existing.importanceScore;
   const newDueDate = dueDate !== undefined
     ? (dueDate ? new Date(dueDate) : null)
@@ -55,6 +56,7 @@ export async function PATCH(
       urgencyScore,
       quadrant,
       priorityRank,
+      ...(sortOrder !== undefined && { sortOrder }),
       dueDate: newDueDate,
       ...(status !== undefined && { status }),
     },

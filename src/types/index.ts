@@ -11,6 +11,7 @@ export interface TaskWithMeta {
   urgencyScore: number;
   quadrant: Quadrant;
   priorityRank: number;
+  sortOrder: number;
   status: TaskStatus;
   dueDate: string | null;
   googleTaskId: string | null;

@@ -8,7 +8,7 @@ interface SyncResult {
   error?: string;
 }
 
-export function SyncButton({ onSynced }: { onSynced?: () => void }) {
+export function SyncButton({ onSynced }: { onSynced?: (opts?: { force?: boolean }) => void }) {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
 
@@ -18,10 +18,10 @@ export function SyncButton({ onSynced }: { onSynced?: () => void }) {
       const res = await fetch("/api/tasks/sync-google", { method: "POST" });
       const data: SyncResult = await res.json();
       if (data.success) {
+        await onSynced?.({ force: true });
         setStatus("success");
         setMessage(data.message ?? "동기화 완료");
-        onSynced?.();
-        setTimeout(() => setStatus("idle"), 3000);
+        setTimeout(() => setStatus("idle"), 4000);
       } else {
         setStatus("error");
         setMessage(data.error ?? "동기화 실패");

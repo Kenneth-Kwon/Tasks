@@ -23,7 +23,8 @@ import { SyncButton } from "./SyncButton";
 import { SettingsModal } from "./SettingsModal";
 import { useSettings } from "@/hooks/useSettings";
 import { calcPriorityRank } from "@/lib/quadrant";
-import { scoresForInsert, quadrantOfTask } from "@/lib/drag-scores";
+import { scoresForInsert, quadrantOfTask, sortOrderBetween } from "@/lib/drag-scores";
+import { useViewMode } from "@/hooks/useViewMode";
 import type { TaskWithMeta, Quadrant } from "@/types";
 
 const AUTO_SYNC_INTERVAL = 15 * 60 * 1000;
@@ -71,6 +72,7 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   const [editingTask, setEditingTask] = useState<TaskWithMeta | null>(null);
   const [activeTask, setActiveTask] = useState<TaskWithMeta | null>(null);
   const { settings, save: saveSettings } = useSettings();
+  const { isSimple } = useViewMode();
   const lastOverRef = useRef<{ id: string; quadrant: Quadrant } | null>(null);
   const ignoreSyncUntilRef = useRef(0);
   const lastSyncRef = useRef<Date | null>(null);
@@ -86,10 +88,12 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
     (q: Quadrant) =>
       tasks
         .filter((t) => quadrantOfTask(t, settings) === q)
-        .sort(
-          (a, b) =>
-            calcPriorityRank(b.importanceScore, b.urgencyScore) -
-            calcPriorityRank(a.importanceScore, a.urgencyScore)
+        // sortOrder DESC → 높은 값이 위에 표시됨. 같으면 priorityRank 기준
+        .sort((a, b) =>
+          b.sortOrder !== a.sortOrder
+            ? b.sortOrder - a.sortOrder
+            : calcPriorityRank(b.importanceScore, b.urgencyScore) -
+              calcPriorityRank(a.importanceScore, a.urgencyScore)
         ),
     [tasks, settings]
   );
@@ -97,7 +101,14 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   function handleDragStart({ active }: DragStartEvent) {
     const t = tasks.find((t) => t.id === active.id);
     setActiveTask(t ?? null);
-    lastOverRef.current = t ? { id: t.id, quadrant: quadrantOfTask(t, settings) } : null;
+    // task ID가 아닌 소속 사분면 ID로 초기화: over가 null일 때 home quadrant에 drop으로 처리됨.
+    // task ID로 초기화하면 active.id === overId → 즉시 early return(snap-back) 발생.
+    if (t) {
+      const q = quadrantOfTask(t, settings);
+      lastOverRef.current = { id: q, quadrant: q };
+    } else {
+      lastOverRef.current = null;
+    }
   }
 
   function handleDragOver({ over }: DragOverEvent) {
@@ -131,11 +142,10 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
     let below: TaskWithMeta | null = null;
 
     if (isQuadrantId(overId)) {
+      // 컬럼 배경에 드롭 → 해당 컬럼 맨 끝에 삽입
       targetQuadrant = overId;
-      if (targetQuadrant === currentQuadrant) {
-        const col = tasksByQuadrant(targetQuadrant).filter((t) => t.id !== dragged.id);
-        above = col[col.length - 1] ?? null;
-      }
+      const col = tasksByQuadrant(targetQuadrant).filter((t) => t.id !== dragged.id);
+      above = col[col.length - 1] ?? null;
     } else {
       const overTask = tasks.find((t) => t.id === overId);
       if (!overTask) return;
@@ -143,67 +153,89 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
       targetQuadrant = quadrantOfTask(overTask, settings);
       const col = tasksByQuadrant(targetQuadrant).filter((t) => t.id !== dragged.id);
       const overIdx = col.findIndex((t) => t.id === overId);
-      if (overIdx === -1) return;
 
-      const activeRect = active.rect.current.translated ?? active.rect.current.initial;
-      const insertAfter = over && activeRect
-        ? activeRect.top + activeRect.height / 2 > over.rect.top + over.rect.height / 2
-        : false;
-
-      if (insertAfter) {
-        above = col[overIdx] ?? null;
-        below = col[overIdx + 1] ?? null;
+      if (overIdx === -1) {
+        above = col[col.length - 1] ?? null;
       } else {
-        above = col[overIdx - 1] ?? null;
-        below = col[overIdx] ?? null;
+        const activeRect = active.rect.current.translated ?? active.rect.current.initial;
+        const insertAfter =
+          over && activeRect
+            ? activeRect.top + activeRect.height / 2 > over.rect.top + over.rect.height / 2
+            : false;
+
+        if (insertAfter) {
+          above = col[overIdx] ?? null;
+          below = col[overIdx + 1] ?? null;
+        } else {
+          above = col[overIdx - 1] ?? null;
+          below = col[overIdx] ?? null;
+        }
       }
     }
 
-    const { importanceScore, urgencyScore } = scoresForInsert(
-      targetQuadrant,
-      above,
-      below,
-      dragged,
-      settings
-    );
-    const quadrant = targetQuadrant;
+    // sortOrder는 항상 계산 (float 중간값이므로 무한 분할 가능 → snap-back 없음)
+    const newSortOrder = sortOrderBetween(above, below, dragged);
+    const isWithinQuadrant = targetQuadrant === currentQuadrant;
 
-    if (
-      targetQuadrant === currentQuadrant &&
-      importanceScore === dragged.importanceScore &&
-      urgencyScore === dragged.urgencyScore
-    ) {
-      return;
-    }
+    if (isWithinQuadrant) {
+      // ── 같은 사분면 내 재정렬: sortOrder만 변경 ──────────────────────────────
+      // importanceScore/urgencyScore를 건드리지 않으므로 사분면 이탈 없음
+      if (newSortOrder === dragged.sortOrder) return; // 유일한 task이거나 동일 위치
 
-    ignoreSyncUntilRef.current = Date.now() + 15_000;
-
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === dragged.id ? { ...t, importanceScore, urgencyScore, quadrant } : t
-      )
-    );
-
-    fetch(`/api/tasks/${dragged.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ importanceScore, urgencyScore }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((updated: TaskWithMeta | null) => {
-        if (updated) {
-          setTasks((prev) =>
-            prev.map((t) =>
-              t.id === updated.id
-                ? { ...t, ...updated, importanceScore, urgencyScore, quadrant }
-                : t
-            )
-          );
-        }
+      ignoreSyncUntilRef.current = Date.now() + 15_000;
+      setTasks((prev) =>
+        prev.map((t) => (t.id === dragged.id ? { ...t, sortOrder: newSortOrder } : t))
+      );
+      fetch(`/api/tasks/${dragged.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sortOrder: newSortOrder }),
       })
-      .catch(() => {
-        setTasks((prev) => prev.map((t) => (t.id === dragged.id ? dragged : t)));
-      });
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => {
+          setTasks((prev) => prev.map((t) => (t.id === dragged.id ? dragged : t)));
+        });
+    } else {
+      // ── 사분면 이동: importanceScore/urgencyScore + sortOrder 변경 ──────────
+      const { importanceScore, urgencyScore } = scoresForInsert(
+        targetQuadrant,
+        above,
+        below,
+        dragged,
+        settings,
+        false // cross-quadrant: urgency도 target bounds에 clamp
+      );
+      const quadrant = targetQuadrant;
+
+      ignoreSyncUntilRef.current = Date.now() + 15_000;
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === dragged.id
+            ? { ...t, importanceScore, urgencyScore, quadrant, sortOrder: newSortOrder }
+            : t
+        )
+      );
+      fetch(`/api/tasks/${dragged.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ importanceScore, urgencyScore, sortOrder: newSortOrder }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((updated: TaskWithMeta | null) => {
+          if (updated) {
+            setTasks((prev) =>
+              prev.map((t) =>
+                t.id === updated.id
+                  ? { ...t, ...updated, importanceScore, urgencyScore, quadrant, sortOrder: newSortOrder }
+                  : t
+              )
+            );
+          }
+        })
+        .catch(() => {
+          setTasks((prev) => prev.map((t) => (t.id === dragged.id ? dragged : t)));
+        });
+    }
   }
 
   const handleAdd = useCallback(() => { setEditingTask(null); setModalOpen(true); }, []);
@@ -248,8 +280,8 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
     }
   }, []);
 
-  const handleSynced = useCallback(async () => {
-    if (Date.now() < ignoreSyncUntilRef.current) return;
+  const handleSynced = useCallback(async (opts?: { force?: boolean }) => {
+    if (!opts?.force && Date.now() < ignoreSyncUntilRef.current) return;
     const res = await fetch("/api/tasks");
     if (res.ok) setTasks(await res.json());
   }, []);
@@ -285,11 +317,12 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
-      <div className="mb-4">
-        <ScoreWidget tasks={tasks} />
+      <div className={isSimple ? "flex min-h-0 flex-1 flex-col" : undefined}>
+      <div className={isSimple ? "mb-2 shrink-0" : "mb-4"}>
+        <ScoreWidget tasks={tasks} compact={isSimple} />
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <div className={isSimple ? "mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2" : "mb-4 flex flex-wrap items-center justify-between gap-2"}>
         <div className="flex flex-wrap items-center gap-2">
           <SyncButton onSynced={handleSynced} />
           <SettingsModal settings={settings} onSave={saveSettings} />
@@ -312,17 +345,129 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {quadrantOrder.map((q) => (
-          <QuadrantColumn
-            key={q}
-            quadrant={q}
-            tasks={tasksByQuadrant(q)}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            onStatusToggle={handleStatusToggle}
-          />
-        ))}
+      {/* Simple 모드: X/Y축 레이블 포함 레이아웃 */}
+      {isSimple ? (
+        <div className="flex min-h-0 flex-1 gap-2">
+          {/* Y축 — 중요도 (세로) */}
+          <div className="flex w-10 shrink-0 flex-col items-center py-0.5">
+            {/* 위 화살촉: Q1(red)+Q2(blue) → 중요 */}
+            <svg width="20" height="14" viewBox="0 0 20 14" className="shrink-0">
+              <defs>
+                <linearGradient id="yTopGrad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#3b82f6" />
+                  <stop offset="100%" stopColor="#ef4444" />
+                </linearGradient>
+              </defs>
+              <polygon points="0,14 20,14 10,0" fill="url(#yTopGrad)" />
+            </svg>
+            <span className="mt-0.5 text-[10px] font-semibold text-slate-500 dark:text-slate-400 select-none">높음</span>
+            {/* 세로 막대 (그라데이션) + 레이블 */}
+            <div className="relative flex flex-1 w-full items-center justify-center">
+              <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="yBarGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#3b82f6" />
+                    <stop offset="50%" stopColor="#a855f7" />
+                    <stop offset="100%" stopColor="#9ca3af" />
+                  </linearGradient>
+                </defs>
+                <rect x="50%" y="0" width="8" height="100%" transform="translate(-4,0)" rx="4" fill="url(#yBarGrad)" />
+              </svg>
+              <span
+                className="relative select-none bg-slate-50 px-2 py-1 text-sm font-bold text-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                style={{ transform: "rotate(-90deg)", whiteSpace: "nowrap" }}
+              >
+                중요도
+              </span>
+            </div>
+            <span className="mb-0.5 text-[10px] font-semibold text-slate-500 dark:text-slate-400 select-none">낮음</span>
+            {/* 아래 화살촉: Q3(amber)+Q4(gray) → 비중요 */}
+            <svg width="20" height="14" viewBox="0 0 20 14" className="shrink-0">
+              <defs>
+                <linearGradient id="yBotGrad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#9ca3af" />
+                  <stop offset="100%" stopColor="#f59e0b" />
+                </linearGradient>
+              </defs>
+              <polygon points="0,0 20,0 10,14" fill="url(#yBotGrad)" />
+            </svg>
+          </div>
+
+          {/* 오른쪽: X축 + 그리드 */}
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
+            {/* X축 — 시급성 (가로) */}
+            <div className="flex shrink-0 items-center py-0.5">
+              <span className="mr-1 text-[10px] font-semibold text-slate-500 dark:text-slate-400 select-none">낮음</span>
+              {/* 왼쪽 화살촉: Q2(blue)+Q4(gray) → 비긴급 */}
+              <svg width="14" height="20" viewBox="0 0 14 20" className="shrink-0">
+                <defs>
+                  <linearGradient id="xLeftGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#3b82f6" />
+                    <stop offset="100%" stopColor="#9ca3af" />
+                  </linearGradient>
+                </defs>
+                <polygon points="14,0 14,20 0,10" fill="url(#xLeftGrad)" />
+              </svg>
+              {/* 가로 막대 (그라데이션) + 레이블 */}
+              <div className="relative flex flex-1 items-center justify-center">
+                <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="xBarGrad" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#6b7280" />
+                      <stop offset="50%" stopColor="#f59e0b" />
+                      <stop offset="100%" stopColor="#ef4444" />
+                    </linearGradient>
+                  </defs>
+                  <rect x="0" y="50%" width="100%" height="8" transform="translate(0,-4)" rx="4" fill="url(#xBarGrad)" />
+                </svg>
+                <span className="relative select-none bg-slate-50 px-2 text-sm font-bold text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                  시급성
+                </span>
+              </div>
+              {/* 오른쪽 화살촉: Q1(red)+Q3(amber) → 긴급 */}
+              <svg width="14" height="20" viewBox="0 0 14 20" className="shrink-0">
+                <defs>
+                  <linearGradient id="xRightGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#ef4444" />
+                    <stop offset="100%" stopColor="#f59e0b" />
+                  </linearGradient>
+                </defs>
+                <polygon points="0,0 0,20 14,10" fill="url(#xRightGrad)" />
+              </svg>
+              <span className="ml-1 text-[10px] font-semibold text-slate-500 dark:text-slate-400 select-none">높음</span>
+            </div>
+
+            {/* 4사분면 그리드 */}
+            <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-2">
+              {quadrantOrder.map((q) => (
+                <QuadrantColumn
+                  key={q}
+                  quadrant={q}
+                  tasks={tasksByQuadrant(q)}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onStatusToggle={handleStatusToggle}
+                  simple={isSimple}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {quadrantOrder.map((q) => (
+            <QuadrantColumn
+              key={q}
+              quadrant={q}
+              tasks={tasksByQuadrant(q)}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onStatusToggle={handleStatusToggle}
+              simple={isSimple}
+            />
+          ))}
+        </div>
+      )}
       </div>
 
       {/* 드래그 중 떠다니는 카드 미리보기 */}
@@ -335,6 +480,7 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
               onDelete={() => {}}
               onStatusToggle={() => {}}
               overlay
+              simple={isSimple}
             />
           </div>
         )}

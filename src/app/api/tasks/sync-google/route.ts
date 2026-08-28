@@ -4,88 +4,202 @@ import { db } from "@/lib/db";
 import { getGoogleClient, parseGoogleDue, toGoogleDue } from "@/lib/google-tasks";
 import { calcUrgencyScore, calcQuadrant, calcPriorityRank } from "@/lib/quadrant";
 
-// 단일 사용자 동기화 로직
-async function syncUser(userId: string) {
-  const tasksClient = await getGoogleClient(userId);
-  const listsRes = await tasksClient.tasklists.list({ maxResults: 20 });
-  const lists = listsRes.data.items ?? [];
+type TasksClient = Awaited<ReturnType<typeof getGoogleClient>>;
 
-  let imported = 0, updated = 0, pushed = 0;
+type GoogleTaskItem = {
+  id?: string | null;
+  title?: string | null;
+  parent?: string | null;
+  status?: string | null;
+  due?: string | null;
+  notes?: string | null;
+};
 
-  for (const list of lists) {
-    if (!list.id) continue;
-    const listId = list.id;
+async function mapPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  if (items.length === 0) return;
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = items[index++];
+      await fn(current);
+    }
+  });
+  await Promise.all(workers);
+}
 
-    // 미완료 Task만 가져오기
-    const activeRes = await tasksClient.tasks.list({
+async function listActiveGoogleTasks(tasksClient: TasksClient, listId: string) {
+  const items: GoogleTaskItem[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await tasksClient.tasks.list({
       tasklist: listId,
       showCompleted: false,
       maxResults: 100,
+      pageToken,
     });
-    const allGoogleTasks = activeRes.data.items ?? [];
+    items.push(...(res.data.items ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return items;
+}
 
-    for (const gt of allGoogleTasks) {
-      if (!gt.id || !gt.title) continue;
-      if (gt.parent) continue; // 하위 항목 제외
+function sameDue(a: Date | null, b: Date | null) {
+  return (a?.getTime() ?? null) === (b?.getTime() ?? null);
+}
 
-      const dueDate = parseGoogleDue(gt.due);
-      const defaultImportance = 5; // Google Tasks API는 별표 정보를 제공하지 않으므로 기본값 사용
-      const urgencyScore = calcUrgencyScore(dueDate);
-      const quadrant = calcQuadrant(defaultImportance, urgencyScore);
-      const priorityRank = calcPriorityRank(defaultImportance, urgencyScore);
+async function syncUser(userId: string) {
+  const tasksClient = await getGoogleClient(userId);
+  const listsRes = await tasksClient.tasklists.list({ maxResults: 100 });
+  const lists = (listsRes.data.items ?? []).filter((list) => list.id);
 
-      const existing = await db.task.findFirst({
-        where: { userId, googleTaskId: gt.id },
+  const listTasks = await Promise.all(
+    lists.map(async (list) => ({
+      listId: list.id!,
+      tasks: await listActiveGoogleTasks(tasksClient, list.id!),
+    }))
+  );
+
+  const seenGoogleIds = new Set<string>();
+  const incoming: { listId: string; gt: GoogleTaskItem }[] = [];
+  for (const { listId, tasks } of listTasks) {
+    for (const gt of tasks) {
+      if (!gt.id) continue;
+      seenGoogleIds.add(gt.id);
+      if (!gt.title || gt.parent) continue;
+      incoming.push({ listId, gt });
+    }
+  }
+
+  const locals = await db.task.findMany({ where: { userId } });
+  const byGoogleId = new Map(
+    locals.filter((task) => task.googleTaskId).map((task) => [task.googleTaskId!, task])
+  );
+
+  let imported = 0;
+  let updated = 0;
+  let removed = 0;
+  let pushed = 0;
+
+  const toCreate: {
+    userId: string;
+    title: string;
+    description: string | null;
+    importanceScore: number;
+    urgencyScore: number;
+    quadrant: "Q1" | "Q2" | "Q3" | "Q4";
+    priorityRank: number;
+    dueDate: Date | null;
+    status: "TODO";
+    googleTaskId: string;
+    googleListId: string;
+  }[] = [];
+  const toUpdate: { id: string; data: Record<string, unknown> }[] = [];
+
+  for (const { listId, gt } of incoming) {
+    const existing = byGoogleId.get(gt.id!);
+    const dueDate = parseGoogleDue(gt.due);
+    const notes = gt.notes !== undefined && gt.notes !== null ? gt.notes : existing?.description ?? null;
+
+    if (existing) {
+      const nextStatus = existing.status === "IN_PROGRESS" ? "IN_PROGRESS" : "TODO";
+      const dueChanged = !sameDue(existing.dueDate, dueDate);
+      const newUrgency = dueChanged ? calcUrgencyScore(dueDate) : existing.urgencyScore;
+      const unchanged =
+        existing.title === gt.title &&
+        existing.description === notes &&
+        !dueChanged &&
+        existing.status === nextStatus &&
+        existing.googleListId === listId;
+      if (unchanged) continue;
+
+      toUpdate.push({
+        id: existing.id,
+        data: {
+          title: gt.title!,
+          description: notes,
+          dueDate,
+          urgencyScore: newUrgency,
+          quadrant: calcQuadrant(existing.importanceScore, newUrgency),
+          priorityRank: calcPriorityRank(existing.importanceScore, newUrgency),
+          status: nextStatus,
+          googleListId: listId,
+        },
       });
-
-      if (existing) {
-        const newImportance = existing.importanceScore;
-        const dueChanged =
-          (existing.dueDate?.getTime() ?? null) !== (dueDate?.getTime() ?? null);
-        const newUrgency = dueChanged ? calcUrgencyScore(dueDate) : existing.urgencyScore;
-        await db.task.update({
-          where: { id: existing.id },
-          data: {
-            title: gt.title,
-            description: gt.notes ?? existing.description,
-            dueDate,
-            importanceScore: newImportance,
-            urgencyScore: newUrgency,
-            quadrant: calcQuadrant(newImportance, newUrgency),
-            priorityRank: calcPriorityRank(newImportance, newUrgency),
-            status: "TODO",
-            googleListId: listId,
-          },
-        });
-        updated++;
-      } else {
-        await db.task.create({
-          data: {
-            userId,
-            title: gt.title,
-            description: gt.notes ?? null,
-            importanceScore: defaultImportance,
-            urgencyScore,
-            quadrant,
-            priorityRank,
-            dueDate,
-            status: "TODO",
-            googleTaskId: gt.id,
-            googleListId: listId,
-          },
-        });
-        imported++;
-      }
+      continue;
     }
 
-    // 앱에만 있는 Task → Google push
-    const localOnly = await db.task.findMany({
-      where: { userId, googleTaskId: null, status: { not: "DONE" } },
+    const urgencyScore = calcUrgencyScore(dueDate);
+    toCreate.push({
+      userId,
+      title: gt.title!,
+      description: notes,
+      importanceScore: 5,
+      urgencyScore,
+      quadrant: calcQuadrant(5, urgencyScore),
+      priorityRank: calcPriorityRank(5, urgencyScore),
+      dueDate,
+      status: "TODO",
+      googleTaskId: gt.id!,
+      googleListId: listId,
     });
-    for (const lt of localOnly) {
+  }
+
+  if (toUpdate.length > 0) {
+    await mapPool(toUpdate, 8, async (item) => {
+      await db.task.update({ where: { id: item.id }, data: item.data });
+    });
+    updated = toUpdate.length;
+  }
+
+  if (toCreate.length > 0) {
+    await db.task.createMany({ data: toCreate });
+    imported = toCreate.length;
+  }
+
+  const missing = locals.filter(
+    (task) => task.googleTaskId && task.googleListId && !seenGoogleIds.has(task.googleTaskId)
+  );
+  const toRemove: string[] = [];
+
+  await mapPool(missing, 6, async (task) => {
+    if (task.status === "DONE") return;
+    try {
+      const remote = await tasksClient.tasks.get({
+        tasklist: task.googleListId!,
+        task: task.googleTaskId!,
+      });
+      if (remote.data.status === "completed") {
+        await db.task.update({
+          where: { id: task.id },
+          data: { status: "DONE", title: remote.data.title ?? task.title },
+        });
+        updated++;
+        return;
+      }
+      if (remote.data.deleted) {
+        toRemove.push(task.id);
+      }
+    } catch {
+      toRemove.push(task.id);
+    }
+  });
+
+  if (toRemove.length > 0) {
+    await db.task.deleteMany({ where: { userId, id: { in: toRemove } } });
+    removed = toRemove.length;
+  }
+
+  const pushList =
+    lists.find((list) =>
+      ["기타", "Other", "other", "기타 (Other)"].includes(list.title ?? "")
+    ) ?? lists[0];
+
+  if (pushList?.id) {
+    const localOnly = locals.filter((task) => !task.googleTaskId && task.status !== "DONE");
+    await mapPool(localOnly, 4, async (lt) => {
       try {
         const created = await tasksClient.tasks.insert({
-          tasklist: listId,
+          tasklist: pushList.id!,
           requestBody: {
             title: lt.title,
             notes: lt.description ?? undefined,
@@ -95,19 +209,19 @@ async function syncUser(userId: string) {
         if (created.data.id) {
           await db.task.update({
             where: { id: lt.id },
-            data: { googleTaskId: created.data.id, googleListId: listId },
+            data: { googleTaskId: created.data.id, googleListId: pushList.id },
           });
           pushed++;
         }
-      } catch { /* 무시 */ }
-    }
-    break; // 앱 Task는 첫 번째 목록에만 push
+      } catch {
+        /* 무시 */
+      }
+    });
   }
 
-  return { imported, updated, pushed };
+  return { imported, updated, removed, pushed };
 }
 
-// 버튼 클릭 / 자동 호출 (로그인된 사용자)
 export async function POST() {
   const session = await auth();
   if (!session?.user?.id) {
@@ -119,7 +233,7 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       ...result,
-      message: `동기화 완료 — ${result.imported}개 가져옴, ${result.updated}개 갱신, ${result.pushed}개 내보냄`,
+      message: `동기화 완료 — 가져옴 ${result.imported}, 갱신 ${result.updated}, 삭제 ${result.removed}, 내보냄 ${result.pushed}`,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "알 수 없는 오류";
@@ -127,7 +241,6 @@ export async function POST() {
   }
 }
 
-// Vercel Cron 전용 — 모든 사용자 자동 동기화 (15분마다)
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -139,10 +252,7 @@ export async function GET(req: NextRequest) {
     select: { id: true },
   });
 
-  const results = await Promise.allSettled(
-    users.map((u) => syncUser(u.id))
-  );
-
+  const results = await Promise.allSettled(users.map((u) => syncUser(u.id)));
   const succeeded = results.filter((r) => r.status === "fulfilled").length;
   return NextResponse.json({ synced: succeeded, total: users.length });
 }

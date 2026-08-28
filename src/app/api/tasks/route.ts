@@ -46,6 +46,14 @@ export async function POST(req: NextRequest) {
   const quadrant = calcQuadrant(importanceScore, urgencyScore);
   const priorityRank = calcPriorityRank(importanceScore, urgencyScore);
 
+  // 해당 사분면 최상단(sortOrder 최대값)보다 10000 높게 설정 → 새 task가 맨 위에 추가됨
+  const topTask = await db.task.findFirst({
+    where: { userId: session.user.id, quadrant },
+    orderBy: { sortOrder: "desc" },
+    select: { sortOrder: true },
+  });
+  const sortOrder = (topTask?.sortOrder ?? 0) + 10000;
+
   const task = await db.task.create({
     data: {
       userId: session.user.id,
@@ -55,6 +63,7 @@ export async function POST(req: NextRequest) {
       urgencyScore,
       quadrant,
       priorityRank,
+      sortOrder,
       dueDate: parsedDueDate,
     },
   });

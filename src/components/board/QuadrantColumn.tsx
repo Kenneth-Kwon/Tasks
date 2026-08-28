@@ -13,9 +13,10 @@ interface QuadrantColumnProps {
   onEdit: (task: TaskWithMeta) => void;
   onDelete: (id: string) => void;
   onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void;
+  simple?: boolean;
 }
 
-export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusToggle }: QuadrantColumnProps) {
+export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusToggle, simple }: QuadrantColumnProps) {
   const meta = QUADRANT_META[quadrant];
   const pending = tasks.filter((t) => t.status !== "DONE");
   const done = tasks.filter((t) => t.status === "DONE");
@@ -31,17 +32,17 @@ export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusTogg
   return (
     <div
       ref={setNodeRef}
-      className={`flex flex-col rounded-xl border-2 ${meta.borderColor} ${meta.bgColor} min-h-[300px] transition-colors ${isOver ? "ring-2 ring-blue-400 ring-offset-1" : ""}`}
+      className={`flex min-h-0 flex-col rounded-xl border-2 ${meta.borderColor} ${meta.bgColor} transition-colors ${simple ? "h-full overflow-hidden" : "min-h-[300px]"} ${isOver ? "ring-2 ring-blue-400 ring-offset-1" : ""}`}
     >
       {/* 헤더 */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200/60 dark:border-slate-700/60">
+      <div className={`flex shrink-0 items-center gap-2 border-b border-slate-200/60 dark:border-slate-700/60 ${simple ? "px-3 py-2" : "px-4 py-3"}`}>
         <div className={`h-3 w-3 rounded-full ${meta.dotColor} shrink-0`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5">
             <span className="text-sm font-semibold">{quadrant}</span>
             <span className="text-sm font-medium truncate">{meta.label}</span>
           </div>
-          <p className="text-xs text-slate-500">{meta.sub} · {meta.desc}</p>
+          {!simple && <p className="text-xs text-slate-500">{meta.sub} · {meta.desc}</p>}
         </div>
         <span className={`shrink-0 text-xs font-semibold rounded-full px-2 py-0.5 ${meta.badgeColor}`}>
           {pending.length}
@@ -49,7 +50,7 @@ export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusTogg
       </div>
 
       {/* Task 목록 */}
-      <div className="flex flex-1 flex-col gap-2 px-3 py-3">
+      <div className={`flex min-h-0 flex-1 flex-col gap-2 px-3 py-3 ${simple ? "overflow-y-auto" : ""}`}>
         {pending.length === 0 && done.length === 0 && (
           <div className="flex flex-col items-center justify-center py-8 text-slate-400">
             <p className="text-xs">Task가 없습니다</p>
@@ -65,6 +66,7 @@ export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusTogg
               onEdit={onEdit}
               onDelete={onDelete}
               onStatusToggle={onStatusToggle}
+              simple={simple}
             />
           ))}
         </SortableContext>
@@ -91,6 +93,7 @@ export function QuadrantColumn({ quadrant, tasks, onEdit, onDelete, onStatusTogg
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onStatusToggle={onStatusToggle}
+                simple={simple}
               />
             ))}
           </>

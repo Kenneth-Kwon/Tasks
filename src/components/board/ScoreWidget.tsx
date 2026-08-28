@@ -22,15 +22,34 @@ const GRADE_BG: Record<string, string> = {
 
 interface ScoreWidgetProps {
   tasks: TaskWithMeta[];
+  compact?: boolean;
 }
 
-export function ScoreWidget({ tasks }: ScoreWidgetProps) {
+export function ScoreWidget({ tasks, compact }: ScoreWidgetProps) {
   const data = useMemo(() => calcScore(tasks), [tasks]);
 
   const TrendIcon = data.weeklyTrend === "up" ? TrendingUp
     : data.weeklyTrend === "down" ? TrendingDown : Minus;
   const trendColor = data.weeklyTrend === "up" ? "text-emerald-500"
     : data.weeklyTrend === "down" ? "text-red-500" : "text-slate-400";
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-slate-500 dark:text-slate-400">생산성</span>
+        <span className={`font-bold tabular-nums ${GRADE_COLOR[data.grade]}`}>
+          {data.score}
+        </span>
+        <span className="text-slate-400">/100</span>
+        <span className={`font-semibold ${GRADE_COLOR[data.grade]}`}>{data.grade}</span>
+        <TrendIcon className={`h-3.5 w-3.5 ${trendColor}`} />
+        <span className="text-xs text-slate-400">+{data.earnedPoints}pt</span>
+        {data.lostPoints > 0 && (
+          <span className="text-xs text-slate-400">· -{data.lostPoints}pt</span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`rounded-xl border p-4 ${GRADE_BG[data.grade]}`}>

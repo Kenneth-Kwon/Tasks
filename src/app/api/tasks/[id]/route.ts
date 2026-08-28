@@ -48,7 +48,7 @@ export async function PATCH(
   const priorityRank = calcPriorityRank(newImportance, urgencyScore);
 
   const task = await db.task.update({
-    where: { id },
+    where: { id, userId: session.user.id },
     data: {
       ...(title !== undefined && { title }),
       ...(description !== undefined && { description }),
@@ -104,6 +104,6 @@ export async function DELETE(
     } catch { /* 무시 */ }
   }
 
-  await db.task.delete({ where: { id } });
+  await db.task.delete({ where: { id, userId: session.user.id } });
   return new NextResponse(null, { status: 204 });
 }

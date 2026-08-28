@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { BoardPageBody } from "@/components/board/BoardPageBody";
 import { ViewModeFrame } from "@/components/board/ViewModeFrame";
 import { ViewModeToggle } from "@/components/board/ViewModeToggle";
+import { LayoutModeToggle } from "@/components/board/LayoutModeToggle";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { LogOut } from "lucide-react";
 import type { TaskWithMeta } from "@/types";
@@ -77,6 +78,7 @@ export default async function HomePage() {
 
           {/* 사용자 */}
           <div className="flex items-center gap-1.5">
+            <LayoutModeToggle />
             <ViewModeToggle />
             <ThemeToggle />
             {session.user.image && (

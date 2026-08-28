@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -23,7 +23,8 @@ import { SyncButton } from "./SyncButton";
 import { SettingsModal } from "./SettingsModal";
 import { useSettings } from "@/hooks/useSettings";
 import { calcPriorityRank } from "@/lib/quadrant";
-import { scoresForInsert, quadrantOfTask, sortOrderBetween } from "@/lib/drag-scores";
+import { scoresForInsert, quadrantOfTask, sortOrderBetween, clampToQuadrant } from "@/lib/drag-scores";
+import { isSubCellId, parseSubCellId, plotToScores, scoresForSubCell, taskToSubCell } from "@/lib/plot-position";
 import { useViewMode } from "@/hooks/useViewMode";
 import type { TaskWithMeta, Quadrant } from "@/types";
 
@@ -42,25 +43,32 @@ function droppableQuadrant(args: Parameters<CollisionDetection>[0], id: string):
   return data?.quadrant;
 }
 
-/** 포인터가 올라간 사분면만 인정한다. 다른 사분면 카드가 드롭을 가로채지 않게 한다. */
-const collisionDetection: CollisionDetection = (args) => {
-  const pointerHits = pointerWithin(args).filter((hit) => hit.id !== args.active.id);
-  const columns = pointerHits.filter((hit) => isQuadrantId(String(hit.id)));
-  const tasks = pointerHits.filter((hit) => !isQuadrantId(String(hit.id)));
+function createCollisionDetection(isMatrix: boolean): CollisionDetection {
+  return (args) => {
+    const pointerHits = pointerWithin(args).filter((hit) => hit.id !== args.active.id);
+    const subcells = pointerHits.filter((hit) => isSubCellId(String(hit.id)));
+    const columns = pointerHits.filter((hit) => isQuadrantId(String(hit.id)));
+    const tasks = pointerHits.filter(
+      (hit) => !isQuadrantId(String(hit.id)) && !isSubCellId(String(hit.id))
+    );
 
-  if (columns.length > 0) {
-    const columnId = String(columns[0].id) as Quadrant;
-    const taskInColumn = tasks.find((hit) => droppableQuadrant(args, String(hit.id)) === columnId);
-    return [taskInColumn ?? columns[0]];
-  }
+    if (isMatrix && subcells.length > 0) return [subcells[0]];
 
-  if (tasks.length > 0) return [tasks[0]];
+    if (columns.length > 0) {
+      if (isMatrix) return [columns[0]];
+      const columnId = String(columns[0].id) as Quadrant;
+      const taskInColumn = tasks.find((hit) => droppableQuadrant(args, String(hit.id)) === columnId);
+      return [taskInColumn ?? columns[0]];
+    }
 
-  const columnContainers = args.droppableContainers.filter((container) =>
-    isQuadrantId(String(container.id))
-  );
-  return closestCorners({ ...args, droppableContainers: columnContainers });
-};
+    if (tasks.length > 0) return [tasks[0]];
+
+    const columnContainers = args.droppableContainers.filter((container) =>
+      isQuadrantId(String(container.id))
+    );
+    return closestCorners({ ...args, droppableContainers: columnContainers });
+  };
+}
 
 interface QuadrantBoardProps {
   initialTasks: TaskWithMeta[];
@@ -72,10 +80,12 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   const [editingTask, setEditingTask] = useState<TaskWithMeta | null>(null);
   const [activeTask, setActiveTask] = useState<TaskWithMeta | null>(null);
   const { settings, save: saveSettings } = useSettings();
-  const { isSimple } = useViewMode();
+  const { isSimple, isMatrix } = useViewMode();
   const lastOverRef = useRef<{ id: string; quadrant: Quadrant } | null>(null);
   const ignoreSyncUntilRef = useRef(0);
   const lastSyncRef = useRef<Date | null>(null);
+  const plotRefs = useRef<Partial<Record<Quadrant, HTMLDivElement | null>>>({});
+  const collisionDetection = useMemo(() => createCollisionDetection(isMatrix), [isMatrix]);
 
   const quadrantOrder: Quadrant[] = ["Q2", "Q1", "Q4", "Q3"];
 
@@ -114,6 +124,11 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   function handleDragOver({ over }: DragOverEvent) {
     if (!over) return;
     const overId = String(over.id);
+    const sub = parseSubCellId(overId);
+    if (sub) {
+      lastOverRef.current = { id: overId, quadrant: sub.quadrant };
+      return;
+    }
     if (isQuadrantId(overId)) {
       lastOverRef.current = { id: overId, quadrant: overId };
       return;
@@ -127,14 +142,80 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
     return overTask ? quadrantOfTask(overTask, settings) : undefined;
   }
 
+  function persistTask(dragged: TaskWithMeta, patch: Partial<TaskWithMeta>) {
+    ignoreSyncUntilRef.current = Date.now() + 15_000;
+    setTasks((prev) => prev.map((t) => (t.id === dragged.id ? { ...t, ...patch } : t)));
+    fetch(`/api/tasks/${dragged.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((updated: TaskWithMeta | null) => {
+        if (updated) {
+          setTasks((prev) =>
+            prev.map((t) => (t.id === updated.id ? { ...t, ...updated, ...patch } : t))
+          );
+        }
+      })
+      .catch(() => {
+        setTasks((prev) => prev.map((t) => (t.id === dragged.id ? dragged : t)));
+      });
+  }
+
+  function scoresFromPlotDrop(quadrant: Quadrant, active: DragEndEvent["active"]) {
+    const el = plotRefs.current[quadrant];
+    const rect = active.rect.current.translated ?? active.rect.current.initial;
+    if (!el || !rect) return null;
+    const box = el.getBoundingClientRect();
+    if (box.width < 8 || box.height < 8) return null;
+    const x = (rect.left + rect.width / 2 - box.left) / box.width;
+    const y = 1 - (rect.top + rect.height / 2 - box.top) / box.height;
+    return plotToScores(x, y, quadrant, settings);
+  }
+
   function handleDragEnd({ active, over }: DragEndEvent) {
     setActiveTask(null);
-    const overId = over ? String(over.id) : lastOverRef.current?.id;
+    const fallback = lastOverRef.current;
+    const overId = over ? String(over.id) : fallback?.id;
     lastOverRef.current = null;
-    if (!overId || active.id === overId) return;
 
     const dragged = tasks.find((t) => t.id === active.id);
     if (!dragged) return;
+
+    if (isMatrix) {
+      const sub = parseSubCellId(overId ?? "");
+      const overTask = overId && !sub && !isQuadrantId(overId)
+        ? tasks.find((t) => t.id === overId) ?? null
+        : null;
+
+      const targetQuadrant = sub?.quadrant
+        ?? (isQuadrantId(overId ?? "") ? (overId as Quadrant) : undefined)
+        ?? (overTask ? quadrantOfTask(overTask, settings) : undefined)
+        ?? fallback?.quadrant;
+      if (!targetQuadrant) return;
+
+      const targetCell = sub?.cell
+        ?? (overTask ? taskToSubCell(overTask, targetQuadrant, settings) : undefined);
+
+      const next = targetCell
+        ? scoresForSubCell(targetQuadrant, targetCell, dragged, settings)
+        : scoresFromPlotDrop(targetQuadrant, active)
+          ?? clampToQuadrant(targetQuadrant, dragged.importanceScore, dragged.urgencyScore, settings);
+
+      if (
+        targetQuadrant === quadrantOfTask(dragged, settings) &&
+        next.importanceScore === dragged.importanceScore &&
+        next.urgencyScore === dragged.urgencyScore
+      ) {
+        return;
+      }
+
+      persistTask(dragged, { ...next, quadrant: targetQuadrant });
+      return;
+    }
+
+    if (!overId || active.id === overId) return;
 
     const currentQuadrant = quadrantOfTask(dragged, settings);
     let targetQuadrant: Quadrant;
@@ -444,10 +525,13 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
                   key={q}
                   quadrant={q}
                   tasks={tasksByQuadrant(q)}
+                  settings={settings}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onStatusToggle={handleStatusToggle}
                   simple={isSimple}
+                  matrix={isMatrix}
+                  onPlotRef={(el) => { plotRefs.current[q] = el; }}
                 />
               ))}
             </div>
@@ -460,10 +544,13 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
               key={q}
               quadrant={q}
               tasks={tasksByQuadrant(q)}
+              settings={settings}
               onEdit={handleEdit}
               onDelete={handleDelete}
               onStatusToggle={handleStatusToggle}
               simple={isSimple}
+              matrix={isMatrix}
+              onPlotRef={(el) => { plotRefs.current[q] = el; }}
             />
           ))}
         </div>
@@ -480,7 +567,7 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
               onDelete={() => {}}
               onStatusToggle={() => {}}
               overlay
-              simple={isSimple}
+              simple={isSimple || isMatrix}
             />
           </div>
         )}

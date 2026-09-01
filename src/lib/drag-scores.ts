@@ -1,3 +1,4 @@
+import { calcPriorityRank } from "@/lib/quadrant";
 import { calcQuadrantWithSettings, type QuadrantSettings } from "@/lib/settings";
 import type { Quadrant, TaskWithMeta } from "@/types";
 
@@ -37,41 +38,60 @@ export function clampToQuadrant(
   };
 }
 
+function rankOf(task: Pick<TaskWithMeta, "importanceScore" | "urgencyScore">) {
+  return calcPriorityRank(task.importanceScore, task.urgencyScore);
+}
+
+/** 사분면 범위 안에서 targetRank에 가장 가까운 정수 점수 쌍을 고른다. */
+function scoresForRank(
+  quadrant: Quadrant,
+  targetRank: number,
+  dragged: TaskWithMeta,
+  settings: QuadrantSettings
+): { importanceScore: number; urgencyScore: number } {
+  const bounds = quadrantBounds(quadrant, settings);
+  let best = {
+    importanceScore: clampScore(dragged.importanceScore, bounds.importance),
+    urgencyScore: clampScore(dragged.urgencyScore, bounds.urgency),
+    dist: Number.POSITIVE_INFINITY,
+    closeness: Number.POSITIVE_INFINITY,
+  };
+
+  for (let importanceScore = bounds.importance.min; importanceScore <= bounds.importance.max; importanceScore++) {
+    for (let urgencyScore = bounds.urgency.min; urgencyScore <= bounds.urgency.max; urgencyScore++) {
+      const dist = Math.abs(calcPriorityRank(importanceScore, urgencyScore) - targetRank);
+      const closeness =
+        Math.abs(importanceScore - dragged.importanceScore) +
+        Math.abs(urgencyScore - dragged.urgencyScore);
+      if (dist < best.dist || (dist === best.dist && closeness < best.closeness)) {
+        best = { importanceScore, urgencyScore, dist, closeness };
+      }
+    }
+  }
+
+  return { importanceScore: best.importanceScore, urgencyScore: best.urgencyScore };
+}
+
 /**
- * 사분면 안 위/아래 이웃의 중간값으로 중요도·긴급도를 만들고,
- * 대상 사분면 범위에 맞게 보정한다.
- *
- * preserveUrgency=true (같은 사분면 내 재정렬): urgencyScore는 그대로 유지하고
- * importanceScore만 보간한다. 이렇게 해야 dueDate로 결정된 urgency가 의미 없이
- * 바뀌지 않고, urgency가 같은 task끼리 재정렬할 때 snap-back이 발생하지 않는다.
+ * 위/아래 이웃 사이에 오도록 중요도·시급성 지수를 다시 계산한다.
+ * 정렬은 중요도×0.6 + 시급성×0.4 내림차순이므로, 그 중간 순위에 맞는 점수를 고른다.
  */
 export function scoresForInsert(
   quadrant: Quadrant,
   above: TaskWithMeta | null,
   below: TaskWithMeta | null,
   dragged: TaskWithMeta,
-  settings: QuadrantSettings,
-  preserveUrgency = false
+  settings: QuadrantSettings
 ): { importanceScore: number; urgencyScore: number } {
-  const bounds = quadrantBounds(quadrant, settings);
+  if (!above && !below) {
+    return clampToQuadrant(quadrant, dragged.importanceScore, dragged.urgencyScore, settings);
+  }
 
-  // 중요도: 위아래 이웃의 중간값 (이웃 없으면 range edge 사용)
-  const rawImportance =
-    !above && !below
-      ? dragged.importanceScore
-      : Math.round(
-          ((above?.importanceScore ?? bounds.importance.max) +
-            (below?.importanceScore ?? bounds.importance.min)) /
-            2
-        );
-  const importanceScore = clampScore(rawImportance, bounds.importance);
+  const aboveRank = above ? rankOf(above) : rankOf(below!) + 1;
+  const belowRank = below ? rankOf(below) : rankOf(above!) - 1;
+  const targetRank = (aboveRank + belowRank) / 2;
 
-  // 긴급도: 같은 사분면 내 재정렬이면 기존값 유지, 사분면 이동이면 target bounds에 clamp
-  const urgencyScore = preserveUrgency
-    ? dragged.urgencyScore
-    : clampScore(dragged.urgencyScore, bounds.urgency);
-
-  return { importanceScore, urgencyScore };
+  return scoresForRank(quadrant, targetRank, dragged, settings);
 }
 
 export function quadrantOfTask(task: TaskWithMeta, settings: QuadrantSettings): Quadrant {

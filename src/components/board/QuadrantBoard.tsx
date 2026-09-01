@@ -98,14 +98,23 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
     (q: Quadrant) =>
       tasks
         .filter((t) => quadrantOfTask(t, settings) === q)
-        // sortOrder DESC → 높은 값이 위에 표시됨. 같으면 priorityRank 기준
-        .sort((a, b) =>
-          b.sortOrder !== a.sortOrder
+        .sort((a, b) => {
+          // Simple: 중요도×0.6 + 시급성×0.4 지수 내림차순
+          if (isSimple) {
+            const rank =
+              calcPriorityRank(b.importanceScore, b.urgencyScore) -
+              calcPriorityRank(a.importanceScore, a.urgencyScore);
+            if (rank !== 0) return rank;
+            if (b.importanceScore !== a.importanceScore) return b.importanceScore - a.importanceScore;
+            return b.urgencyScore - a.urgencyScore;
+          }
+          // Detail: 드래그 순서 유지, 같으면 지수 기준
+          return b.sortOrder !== a.sortOrder
             ? b.sortOrder - a.sortOrder
             : calcPriorityRank(b.importanceScore, b.urgencyScore) -
-              calcPriorityRank(a.importanceScore, a.urgencyScore)
-        ),
-    [tasks, settings]
+              calcPriorityRank(a.importanceScore, a.urgencyScore);
+        }),
+    [tasks, settings, isSimple]
   );
 
   function handleDragStart({ active }: DragStartEvent) {
@@ -254,69 +263,30 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
       }
     }
 
-    // sortOrder는 항상 계산 (float 중간값이므로 무한 분할 가능 → snap-back 없음)
     const newSortOrder = sortOrderBetween(above, below, dragged);
-    const isWithinQuadrant = targetQuadrant === currentQuadrant;
+    const { importanceScore, urgencyScore } = scoresForInsert(
+      targetQuadrant,
+      above,
+      below,
+      dragged,
+      settings
+    );
 
-    if (isWithinQuadrant) {
-      // ── 같은 사분면 내 재정렬: sortOrder만 변경 ──────────────────────────────
-      // importanceScore/urgencyScore를 건드리지 않으므로 사분면 이탈 없음
-      if (newSortOrder === dragged.sortOrder) return; // 유일한 task이거나 동일 위치
-
-      ignoreSyncUntilRef.current = Date.now() + 15_000;
-      setTasks((prev) =>
-        prev.map((t) => (t.id === dragged.id ? { ...t, sortOrder: newSortOrder } : t))
-      );
-      fetch(`/api/tasks/${dragged.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sortOrder: newSortOrder }),
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => {
-          setTasks((prev) => prev.map((t) => (t.id === dragged.id ? dragged : t)));
-        });
-    } else {
-      // ── 사분면 이동: importanceScore/urgencyScore + sortOrder 변경 ──────────
-      const { importanceScore, urgencyScore } = scoresForInsert(
-        targetQuadrant,
-        above,
-        below,
-        dragged,
-        settings,
-        false // cross-quadrant: urgency도 target bounds에 clamp
-      );
-      const quadrant = targetQuadrant;
-
-      ignoreSyncUntilRef.current = Date.now() + 15_000;
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === dragged.id
-            ? { ...t, importanceScore, urgencyScore, quadrant, sortOrder: newSortOrder }
-            : t
-        )
-      );
-      fetch(`/api/tasks/${dragged.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ importanceScore, urgencyScore, sortOrder: newSortOrder }),
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((updated: TaskWithMeta | null) => {
-          if (updated) {
-            setTasks((prev) =>
-              prev.map((t) =>
-                t.id === updated.id
-                  ? { ...t, ...updated, importanceScore, urgencyScore, quadrant, sortOrder: newSortOrder }
-                  : t
-              )
-            );
-          }
-        })
-        .catch(() => {
-          setTasks((prev) => prev.map((t) => (t.id === dragged.id ? dragged : t)));
-        });
+    if (
+      targetQuadrant === currentQuadrant &&
+      importanceScore === dragged.importanceScore &&
+      urgencyScore === dragged.urgencyScore &&
+      newSortOrder === dragged.sortOrder
+    ) {
+      return;
     }
+
+    persistTask(dragged, {
+      importanceScore,
+      urgencyScore,
+      sortOrder: newSortOrder,
+      quadrant: targetQuadrant,
+    });
   }
 
   const handleAdd = useCallback(() => { setEditingTask(null); setModalOpen(true); }, []);

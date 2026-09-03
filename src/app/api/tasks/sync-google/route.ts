@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getGoogleClient, parseGoogleDue, toGoogleDue } from "@/lib/google-tasks";
 import { calcUrgencyScore, calcQuadrant, calcPriorityRank } from "@/lib/quadrant";
+import { refreshUrgencyFromDueDates } from "@/lib/refresh-urgency";
 
 type TasksClient = Awaited<ReturnType<typeof getGoogleClient>>;
 
@@ -219,7 +220,8 @@ async function syncUser(userId: string) {
     });
   }
 
-  return { imported, updated, removed, pushed };
+  const refreshed = await refreshUrgencyFromDueDates(userId);
+  return { imported, updated, removed, pushed, refreshed };
 }
 
 export async function POST() {
@@ -236,7 +238,10 @@ export async function POST() {
       message: `동기화 완료 — 가져옴 ${result.imported}, 갱신 ${result.updated}, 삭제 ${result.removed}, 내보냄 ${result.pushed}`,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "알 수 없는 오류";
+    const raw = err instanceof Error ? err.message : "알 수 없는 오류";
+    const message = raw.toLowerCase().includes("invalid_grant")
+      ? "Google 권한이 만료되었습니다. 로그아웃 후 Google로 다시 로그인해 주세요."
+      : raw;
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

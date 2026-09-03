@@ -24,8 +24,9 @@ export function SyncButton({ onSynced }: { onSynced?: (opts?: { force?: boolean 
         setTimeout(() => setStatus("idle"), 4000);
       } else {
         setStatus("error");
-        setMessage(data.error ?? "동기화 실패");
-        setTimeout(() => setStatus("idle"), 4000);
+        const next = data.error ?? "동기화 실패";
+        setMessage(next);
+        setTimeout(() => setStatus("idle"), next.includes("다시 로그인") ? 8000 : 4000);
       }
     } catch {
       setStatus("error");

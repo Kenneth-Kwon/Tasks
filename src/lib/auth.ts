@@ -15,11 +15,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           scope:
             "openid email profile https://www.googleapis.com/auth/tasks",
           access_type: "offline",
-          prompt: "select_account",
+          prompt: "consent",
         },
       },
     }),
   ],
+  events: {
+    async signIn({ user, account }) {
+      if (!user.id || account?.provider !== "google") return;
+      await db.account.updateMany({
+        where: { userId: user.id, provider: "google" },
+        data: {
+          access_token: account.access_token,
+          expires_at: account.expires_at,
+          token_type: account.token_type,
+          scope: account.scope,
+          id_token: account.id_token,
+          ...(account.refresh_token ? { refresh_token: account.refresh_token } : {}),
+        },
+      });
+    },
+  },
   callbacks: {
     session({ session, user }) {
       session.user.id = user.id;

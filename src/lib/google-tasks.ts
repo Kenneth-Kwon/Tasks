@@ -1,11 +1,20 @@
 import { google } from "googleapis";
 import { db } from "./db";
 
+function isInvalidGrant(err: unknown): boolean {
+  const anyErr = err as { message?: string; response?: { data?: { error?: string } }; code?: string };
+  const text = `${anyErr.message ?? ""} ${anyErr.code ?? ""} ${anyErr.response?.data?.error ?? ""}`.toLowerCase();
+  return text.includes("invalid_grant");
+}
+
+const REAUTH_MESSAGE = "Google 권한이 만료되었습니다. 로그아웃 후 Google로 다시 로그인해 주세요.";
+
 export async function getGoogleClient(userId: string) {
   const account = await db.account.findFirst({
     where: { userId, provider: "google" },
   });
   if (!account?.access_token) throw new Error("Google 계정이 연결되어 있지 않습니다.");
+  if (!account.refresh_token) throw new Error(REAUTH_MESSAGE);
 
   const oauth2Client = new google.auth.OAuth2(
     process.env.AUTH_GOOGLE_ID,
@@ -14,20 +23,28 @@ export async function getGoogleClient(userId: string) {
   );
   oauth2Client.setCredentials({
     access_token: account.access_token,
-    refresh_token: account.refresh_token ?? undefined,
+    refresh_token: account.refresh_token,
     expiry_date: account.expires_at ? account.expires_at * 1000 : undefined,
   });
   oauth2Client.on("tokens", async (tokens) => {
-    if (tokens.access_token) {
-      await db.account.update({
-        where: { id: account.id },
-        data: {
-          access_token: tokens.access_token,
-          expires_at: tokens.expiry_date ? Math.floor(tokens.expiry_date / 1000) : undefined,
-        },
-      });
-    }
+    if (!tokens.access_token) return;
+    await db.account.update({
+      where: { id: account.id },
+      data: {
+        access_token: tokens.access_token,
+        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+        expires_at: tokens.expiry_date ? Math.floor(tokens.expiry_date / 1000) : undefined,
+      },
+    });
   });
+
+  try {
+    await oauth2Client.getAccessToken();
+  } catch (err) {
+    if (isInvalidGrant(err)) throw new Error(REAUTH_MESSAGE);
+    throw err;
+  }
+
   return google.tasks({ version: "v1", auth: oauth2Client });
 }
 

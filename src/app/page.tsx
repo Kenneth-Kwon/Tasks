@@ -7,11 +7,14 @@ import { ViewModeToggle } from "@/components/board/ViewModeToggle";
 import { LayoutModeToggle } from "@/components/board/LayoutModeToggle";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { LogOut } from "lucide-react";
+import { refreshUrgencyFromDueDates } from "@/lib/refresh-urgency";
 import type { TaskWithMeta } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 async function getTasks(userId: string): Promise<TaskWithMeta[]> {
+  await refreshUrgencyFromDueDates(userId);
+
   const tasks = await db.task.findMany({
     where: { userId },
     orderBy: [{ quadrant: "asc" }, { priorityRank: "desc" }],

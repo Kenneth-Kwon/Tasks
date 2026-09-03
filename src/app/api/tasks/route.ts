@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { calcUrgencyScore, calcQuadrant, calcPriorityRank } from "@/lib/quadrant";
+import { refreshUrgencyFromDueDates } from "@/lib/refresh-urgency";
 import { getGoogleClient, toGoogleDue } from "@/lib/google-tasks";
 import { z } from "zod";
 
@@ -19,6 +20,8 @@ export async function GET() {
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  await refreshUrgencyFromDueDates(session.user.id);
 
   const tasks = await db.task.findMany({
     where: { userId: session.user.id },

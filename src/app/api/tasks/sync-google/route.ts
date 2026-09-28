@@ -64,15 +64,14 @@ async function syncUser(userId: string) {
   const incoming: { listId: string; gt: GoogleTaskItem }[] = [];
   for (const { listId, tasks } of listTasks) {
     for (const gt of tasks) {
-      if (!gt.id) continue;
+      if (!gt.id || !gt.title) continue;
       seenGoogleIds.add(gt.id);
-      if (!gt.title || gt.parent) continue;
       incoming.push({ listId, gt });
     }
   }
 
-  const locals = await db.task.findMany({ where: { userId } });
-  const byGoogleId = new Map(
+  let locals = await db.task.findMany({ where: { userId } });
+  let byGoogleId = new Map(
     locals.filter((task) => task.googleTaskId).map((task) => [task.googleTaskId!, task])
   );
 
@@ -81,7 +80,7 @@ async function syncUser(userId: string) {
   let removed = 0;
   let pushed = 0;
 
-  const toCreate: {
+  type CreateRow = {
     userId: string;
     title: string;
     description: string | null;
@@ -93,25 +92,38 @@ async function syncUser(userId: string) {
     status: "TODO";
     googleTaskId: string;
     googleListId: string;
-  }[] = [];
+    parentId?: string | null;
+    sortOrder?: number;
+  };
+  const toCreate: CreateRow[] = [];
   const toUpdate: { id: string; data: Record<string, unknown> }[] = [];
 
-  for (const { listId, gt } of incoming) {
+  function collectItem(
+    listId: string,
+    gt: GoogleTaskItem,
+    parentId: string | null,
+    sortOrder: number
+  ) {
     const existing = byGoogleId.get(gt.id!);
     const dueDate = parseGoogleDue(gt.due);
     const notes = gt.notes !== undefined && gt.notes !== null ? gt.notes : existing?.description ?? null;
+    const importanceScore = existing?.importanceScore ?? 5;
+    const urgencyScore = existing && !dueDate
+      ? existing.urgencyScore
+      : existing && sameDue(existing.dueDate, dueDate)
+        ? existing.urgencyScore
+        : calcUrgencyScore(dueDate);
 
     if (existing) {
       const nextStatus = existing.status === "IN_PROGRESS" ? "IN_PROGRESS" : "TODO";
-      const dueChanged = !sameDue(existing.dueDate, dueDate);
-      const newUrgency = dueChanged ? calcUrgencyScore(dueDate) : existing.urgencyScore;
       const unchanged =
         existing.title === gt.title &&
         existing.description === notes &&
-        !dueChanged &&
+        sameDue(existing.dueDate, dueDate) &&
         existing.status === nextStatus &&
-        existing.googleListId === listId;
-      if (unchanged) continue;
+        existing.googleListId === listId &&
+        existing.parentId === parentId;
+      if (unchanged) return;
 
       toUpdate.push({
         id: existing.id,
@@ -119,43 +131,81 @@ async function syncUser(userId: string) {
           title: gt.title!,
           description: notes,
           dueDate,
-          urgencyScore: newUrgency,
-          quadrant: calcQuadrant(existing.importanceScore, newUrgency),
-          priorityRank: calcPriorityRank(existing.importanceScore, newUrgency),
+          urgencyScore,
+          quadrant: calcQuadrant(importanceScore, urgencyScore),
+          priorityRank: calcPriorityRank(importanceScore, urgencyScore),
           status: nextStatus,
           googleListId: listId,
+          parentId,
+          ...(parentId ? { sortOrder } : {}),
         },
       });
-      continue;
+      return;
     }
 
-    const urgencyScore = calcUrgencyScore(dueDate);
     toCreate.push({
       userId,
       title: gt.title!,
       description: notes,
-      importanceScore: 5,
+      importanceScore,
       urgencyScore,
-      quadrant: calcQuadrant(5, urgencyScore),
-      priorityRank: calcPriorityRank(5, urgencyScore),
+      quadrant: calcQuadrant(importanceScore, urgencyScore),
+      priorityRank: calcPriorityRank(importanceScore, urgencyScore),
       dueDate,
       status: "TODO",
       googleTaskId: gt.id!,
       googleListId: listId,
+      parentId,
+      sortOrder,
     });
   }
+
+  const roots = incoming.filter((item) => !item.gt.parent);
+  const children = incoming.filter((item) => item.gt.parent);
+
+  roots.forEach((item, index) => collectItem(item.listId, item.gt, null, (index + 1) * 10000));
 
   if (toUpdate.length > 0) {
     await mapPool(toUpdate, 8, async (item) => {
       await db.task.update({ where: { id: item.id }, data: item.data });
     });
-    updated = toUpdate.length;
+    updated += toUpdate.length;
+    toUpdate.length = 0;
   }
 
   if (toCreate.length > 0) {
     await db.task.createMany({ data: toCreate });
-    imported = toCreate.length;
+    imported += toCreate.length;
+    toCreate.length = 0;
   }
+
+  locals = await db.task.findMany({ where: { userId } });
+  byGoogleId = new Map(
+    locals.filter((task) => task.googleTaskId).map((task) => [task.googleTaskId!, task])
+  );
+
+  const childIndex = new Map<string, number>();
+  children.forEach((item) => {
+    const parent = byGoogleId.get(item.gt.parent!);
+    if (!parent) return;
+    const n = (childIndex.get(parent.id) ?? 0) + 1;
+    childIndex.set(parent.id, n);
+    collectItem(item.listId, item.gt, parent.id, n * 10000);
+  });
+
+  if (toUpdate.length > 0) {
+    await mapPool(toUpdate, 8, async (item) => {
+      await db.task.update({ where: { id: item.id }, data: item.data });
+    });
+    updated += toUpdate.length;
+  }
+
+  if (toCreate.length > 0) {
+    await db.task.createMany({ data: toCreate });
+    imported += toCreate.length;
+  }
+
+  locals = await db.task.findMany({ where: { userId } });
 
   const missing = locals.filter(
     (task) => task.googleTaskId && task.googleListId && !seenGoogleIds.has(task.googleTaskId)
@@ -197,10 +247,11 @@ async function syncUser(userId: string) {
 
   if (pushList?.id) {
     const localOnly = locals.filter((task) => !task.googleTaskId && task.status !== "DONE");
-    await mapPool(localOnly, 4, async (lt) => {
+    const pushOne = async (lt: (typeof localOnly)[number], parentGoogleId?: string) => {
       try {
         const created = await tasksClient.tasks.insert({
           tasklist: pushList.id!,
+          ...(parentGoogleId ? { parent: parentGoogleId } : {}),
           requestBody: {
             title: lt.title,
             notes: lt.description ?? undefined,
@@ -212,11 +263,24 @@ async function syncUser(userId: string) {
             where: { id: lt.id },
             data: { googleTaskId: created.data.id, googleListId: pushList.id },
           });
+          lt.googleTaskId = created.data.id;
           pushed++;
         }
       } catch {
         /* 무시 */
       }
+    };
+
+    const localRoots = localOnly.filter((task) => !task.parentId);
+    await mapPool(localRoots, 4, (lt) => pushOne(lt));
+
+    const localChildren = localOnly.filter((task) => task.parentId);
+    await mapPool(localChildren, 4, async (lt) => {
+      const parent =
+        locals.find((task) => task.id === lt.parentId) ??
+        (await db.task.findFirst({ where: { id: lt.parentId!, userId } }));
+      if (!parent?.googleTaskId) return;
+      await pushOne(lt, parent.googleTaskId);
     });
   }
 

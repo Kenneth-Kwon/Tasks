@@ -93,16 +93,22 @@ export async function DELETE(
   const existing = await getTaskForUser(id, session.user.id);
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // Google Tasks에서도 삭제
-  if (existing.googleTaskId && existing.googleListId) {
-    try {
-      const tasksClient = await getGoogleClient(session.user.id);
-      await tasksClient.tasks.delete({
-        tasklist: existing.googleListId,
-        task: existing.googleTaskId,
-      });
-    } catch { /* 무시 */ }
-  }
+  const children = await db.task.findMany({
+    where: { userId: session.user.id, parentId: id },
+  });
+
+  try {
+    const tasksClient = await getGoogleClient(session.user.id);
+    for (const row of [...children, existing]) {
+      if (!row.googleTaskId || !row.googleListId) continue;
+      try {
+        await tasksClient.tasks.delete({
+          tasklist: row.googleListId,
+          task: row.googleTaskId,
+        });
+      } catch { /* 무시 */ }
+    }
+  } catch { /* 무시 */ }
 
   await db.task.delete({ where: { id, userId: session.user.id } });
   return new NextResponse(null, { status: 204 });

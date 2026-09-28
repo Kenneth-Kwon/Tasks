@@ -67,24 +67,27 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
     setSaving(false);
   }, [open, task, settings.noDateUrgency]);
 
-  // 새 Task 추가 모달이 열릴 때 Google 목록 로드
+  // 모달이 열릴 때 Google 목록 로드 (추가/수정 모두 표시)
   useEffect(() => {
-    if (open && isNew) {
-      setListsLoading(true);
-      fetch("/api/google-lists")
-        .then((r) => r.json())
-        .then((lists: GoogleList[]) => {
-          setGoogleLists(lists);
-          // "기타" 목록을 기본값으로 설정
-          const kita = lists.find((l) =>
+    if (!open) return;
+    setListsLoading(true);
+    fetch("/api/google-lists")
+      .then((r) => r.json())
+      .then((lists: GoogleList[]) => {
+        const next = Array.isArray(lists) ? lists : [];
+        setGoogleLists(next);
+        if (isNew) {
+          const kita = next.find((l) =>
             ["기타", "Other", "other", "기타 (Other)"].includes(l.title)
           );
-          setSelectedListId(kita?.id ?? lists[0]?.id ?? "");
-        })
-        .catch(() => setGoogleLists([]))
-        .finally(() => setListsLoading(false));
-    }
-  }, [open, isNew]);
+          setSelectedListId(kita?.id ?? next[0]?.id ?? "");
+        } else {
+          setSelectedListId(task?.googleListId ?? "");
+        }
+      })
+      .catch(() => setGoogleLists([]))
+      .finally(() => setListsLoading(false));
+  }, [open, isNew, task?.googleListId]);
 
   const dueDateObj = dueDate ? new Date(dueDate + "T00:00:00") : null;
   const autoUrgency = dueDateObj
@@ -218,13 +221,13 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
             )}
           </div>
 
-          {/* Google Task 목록 선택 (새 Task만) */}
-          {isNew && (
-            <div className="space-y-1.5">
-              <Label htmlFor="glist">Google Task 목록</Label>
-              {listsLoading ? (
-                <p className="text-xs text-slate-400">목록 불러오는 중...</p>
-              ) : googleLists.length === 0 ? (
+          {/* Google Task 목록 */}
+          <div className="space-y-1.5">
+            <Label htmlFor="glist">Google Task 목록</Label>
+            {listsLoading ? (
+              <p className="text-xs text-slate-400">목록 불러오는 중...</p>
+            ) : isNew ? (
+              googleLists.length === 0 ? (
                 <p className="text-xs text-slate-400">
                   Google Task 목록을 불러올 수 없습니다.
                 </p>
@@ -241,9 +244,14 @@ export function TaskModal({ open, onClose, onSave, task }: TaskModalProps) {
                     </option>
                   ))}
                 </select>
-              )}
-            </div>
-          )}
+              )
+            ) : (
+              <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+                {googleLists.find((l) => l.id === task?.googleListId)?.title
+                  ?? (task?.googleListId ? "알 수 없는 목록" : "연결되지 않음")}
+              </p>
+            )}
+          </div>
 
           {/* 사분면 미리보기 */}
           <div

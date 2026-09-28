@@ -70,6 +70,11 @@ function createCollisionDetection(isMatrix: boolean): CollisionDetection {
   };
 }
 
+interface GoogleList {
+  id: string;
+  title: string;
+}
+
 interface QuadrantBoardProps {
   initialTasks: TaskWithMeta[];
 }
@@ -79,6 +84,7 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskWithMeta | null>(null);
   const [activeTask, setActiveTask] = useState<TaskWithMeta | null>(null);
+  const [googleLists, setGoogleLists] = useState<GoogleList[]>([]);
   const { settings, save: saveSettings } = useSettings();
   const { isSimple, isMatrix } = useViewMode();
   const lastOverRef = useRef<{ id: string; quadrant: Quadrant } | null>(null);
@@ -97,7 +103,7 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   const tasksByQuadrant = useCallback(
     (q: Quadrant) =>
       tasks
-        .filter((t) => quadrantOfTask(t, settings) === q)
+        .filter((t) => !t.parentId && quadrantOfTask(t, settings) === q)
         .sort((a, b) => {
           // Simple: 중요도×0.6 + 시급성×0.4 지수 내림차순
           if (isSimple) {
@@ -116,6 +122,38 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
         }),
     [tasks, settings, isSimple]
   );
+
+  const childrenOf = useCallback(
+    (id: string) =>
+      tasks
+        .filter((t) => t.parentId === id)
+        .sort((a, b) => a.sortOrder - b.sortOrder),
+    [tasks]
+  );
+
+  const googleListTitleOf = useCallback(
+    (listId: string | null) => {
+      if (!listId) return null;
+      const found = googleLists.find((list) => list.id === listId)?.title;
+      if (found) return found;
+      if (googleLists.length === 0) return null;
+      return "알 수 없는 목록";
+    },
+    [googleLists]
+  );
+
+  useEffect(() => {
+    fetch("/api/google-lists")
+      .then((res) => res.json())
+      .then((lists: unknown) => {
+        if (Array.isArray(lists)) {
+          setGoogleLists(lists.filter((list): list is GoogleList =>
+            !!list && typeof list === "object" && "id" in list && "title" in list
+          ));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   function handleDragStart({ active }: DragStartEvent) {
     const t = tasks.find((t) => t.id === active.id);
@@ -318,16 +356,50 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm("Task를 삭제할까요?")) return;
     const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
-    if (res.ok) setTasks((prev) => prev.filter((t) => t.id !== id));
+    if (res.ok) setTasks((prev) => prev.filter((t) => t.id !== id && t.parentId !== id));
   }, []);
 
-  const handleStatusToggle = useCallback(async (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => {
-    const res = await fetch(`/api/tasks/${id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+  const handleAddChild = useCallback(async (parentId: string, title: string) => {
+    ignoreSyncUntilRef.current = Date.now() + 15_000;
+    const parent = tasks.find((t) => t.id === parentId);
+    const res = await fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        importanceScore: parent?.importanceScore ?? 5,
+        urgencyScore: parent?.urgencyScore ?? 5,
+        parentId,
+      }),
     });
     if (res.ok) {
-      const updated: TaskWithMeta = await res.json();
-      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      const created: TaskWithMeta = await res.json();
+      setTasks((prev) => [...prev, created]);
+    }
+  }, [tasks]);
+
+  const handleStatusToggle = useCallback(async (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => {
+    ignoreSyncUntilRef.current = Date.now() + 15_000;
+    let snapshot: TaskWithMeta | undefined;
+    setTasks((prev) => {
+      snapshot = prev.find((t) => t.id === id);
+      if (!snapshot) return prev;
+      return prev.map((t) => (t.id === id ? { ...t, status } : t));
+    });
+    if (!snapshot) return;
+
+    try {
+      const res = await fetch(`/api/tasks/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        const updated: TaskWithMeta = await res.json();
+        setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      } else {
+        setTasks((prev) => prev.map((t) => (t.id === id ? snapshot! : t)));
+      }
+    } catch {
+      setTasks((prev) => prev.map((t) => (t.id === id ? snapshot! : t)));
     }
   }, []);
 
@@ -499,6 +571,9 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onStatusToggle={handleStatusToggle}
+                  onAddChild={handleAddChild}
+                  childrenOf={childrenOf}
+                  googleListTitleOf={googleListTitleOf}
                   simple={isSimple}
                   matrix={isMatrix}
                   onPlotRef={(el) => { plotRefs.current[q] = el; }}
@@ -518,6 +593,9 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
               onEdit={handleEdit}
               onDelete={handleDelete}
               onStatusToggle={handleStatusToggle}
+              onAddChild={handleAddChild}
+              childrenOf={childrenOf}
+              googleListTitleOf={googleListTitleOf}
               simple={isSimple}
               matrix={isMatrix}
               onPlotRef={(el) => { plotRefs.current[q] = el; }}
@@ -538,6 +616,8 @@ export function QuadrantBoard({ initialTasks }: QuadrantBoardProps) {
               onStatusToggle={() => {}}
               overlay
               simple={isSimple || isMatrix}
+              children={childrenOf(activeTask.id)}
+              googleListTitle={googleListTitleOf(activeTask.googleListId)}
             />
           </div>
         )}

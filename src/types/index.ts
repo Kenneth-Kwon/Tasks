@@ -15,6 +15,8 @@ export interface TaskWithMeta {
   status: TaskStatus;
   dueDate: string | null;
   googleTaskId: string | null;
+  googleListId: string | null;
+  parentId: string | null;
   notifyAt: string | null;
   createdAt: string;
   updatedAt: string;

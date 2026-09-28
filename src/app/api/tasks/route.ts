@@ -13,6 +13,7 @@ const CreateTaskSchema = z.object({
   urgencyScore: z.number().int().min(1).max(10).optional(),
   dueDate: z.string().datetime().optional().nullable(),
   googleListId: z.string().optional().nullable(),
+  parentId: z.string().optional().nullable(),
 });
 
 export async function GET() {
@@ -43,15 +44,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid input", details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { title, description, importanceScore, urgencyScore: urgencyOverride, dueDate, googleListId } = parsed.data;
-  const parsedDueDate = dueDate ? new Date(dueDate) : null;
-  const urgencyScore = urgencyOverride ?? calcUrgencyScore(parsedDueDate);
-  const quadrant = calcQuadrant(importanceScore, urgencyScore);
-  const priorityRank = calcPriorityRank(importanceScore, urgencyScore);
+  const { title, description, importanceScore, urgencyScore: urgencyOverride, dueDate, googleListId, parentId } = parsed.data;
 
-  // 해당 사분면 최상단(sortOrder 최대값)보다 10000 높게 설정 → 새 task가 맨 위에 추가됨
+  let parent: Awaited<ReturnType<typeof db.task.findFirst>> = null;
+  if (parentId) {
+    parent = await db.task.findFirst({
+      where: { id: parentId, userId: session.user.id, parentId: null },
+    });
+    if (!parent) {
+      return NextResponse.json({ error: "Parent task not found" }, { status: 400 });
+    }
+  }
+
+  const parsedDueDate = dueDate ? new Date(dueDate) : null;
+  const urgencyScore = parent?.urgencyScore ?? urgencyOverride ?? calcUrgencyScore(parsedDueDate);
+  const importance = parent?.importanceScore ?? importanceScore;
+  const quadrant = parent?.quadrant ?? calcQuadrant(importance, urgencyScore);
+  const priorityRank = calcPriorityRank(importance, urgencyScore);
+
+  const siblingWhere = parent
+    ? { userId: session.user.id, parentId: parent.id }
+    : { userId: session.user.id, quadrant, parentId: null };
   const topTask = await db.task.findFirst({
-    where: { userId: session.user.id, quadrant },
+    where: siblingWhere,
     orderBy: { sortOrder: "desc" },
     select: { sortOrder: true },
   });
@@ -62,12 +77,13 @@ export async function POST(req: NextRequest) {
       userId: session.user.id,
       title,
       description: description ?? null,
-      importanceScore,
+      importanceScore: importance,
       urgencyScore,
       quadrant,
       priorityRank,
       sortOrder,
       dueDate: parsedDueDate,
+      parentId: parent?.id ?? null,
     },
   });
 
@@ -75,7 +91,7 @@ export async function POST(req: NextRequest) {
   try {
     const tasksClient = await getGoogleClient(session.user.id);
 
-    let targetListId = googleListId ?? null;
+    let targetListId = parent?.googleListId ?? googleListId ?? null;
 
     // 목록 ID가 없으면 "기타" 목록 자동 탐색
     if (!targetListId) {
@@ -96,6 +112,7 @@ export async function POST(req: NextRequest) {
 
     const created = await tasksClient.tasks.insert({
       tasklist: targetListId,
+      ...(parent?.googleTaskId ? { parent: parent.googleTaskId } : {}),
       requestBody: { title, notes: description ?? undefined, due: toGoogleDue(parsedDueDate) },
     });
     if (created.data.id) {

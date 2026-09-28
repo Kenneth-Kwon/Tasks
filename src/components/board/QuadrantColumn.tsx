@@ -15,7 +15,10 @@ interface QuadrantColumnProps {
   settings: QuadrantSettings;
   onEdit: (task: TaskWithMeta) => void;
   onDelete: (id: string) => void;
-  onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void;
+  onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void | Promise<void>;
+  onAddChild?: (parentId: string, title: string) => void | Promise<void>;
+  childrenOf?: (id: string) => TaskWithMeta[];
+  googleListTitleOf?: (listId: string | null) => string | null;
   simple?: boolean;
   matrix?: boolean;
   onPlotRef?: (el: HTMLDivElement | null) => void;
@@ -28,13 +31,19 @@ function MatrixSubCell({
   onEdit,
   onDelete,
   onStatusToggle,
+  onAddChild,
+  childrenOf,
+  googleListTitleOf,
 }: {
   quadrant: Quadrant;
   cell: SubCell;
   tasks: TaskWithMeta[];
   onEdit: (task: TaskWithMeta) => void;
   onDelete: (id: string) => void;
-  onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void;
+  onStatusToggle: (id: string, status: "TODO" | "IN_PROGRESS" | "DONE") => void | Promise<void>;
+  onAddChild?: (parentId: string, title: string) => void | Promise<void>;
+  childrenOf?: (id: string) => TaskWithMeta[];
+  googleListTitleOf?: (listId: string | null) => string | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `${quadrant}:${cell}`,
@@ -55,6 +64,9 @@ function MatrixSubCell({
             onEdit={onEdit}
             onDelete={onDelete}
             onStatusToggle={onStatusToggle}
+            onAddChild={onAddChild}
+            children={childrenOf?.(task.id) ?? []}
+            googleListTitle={googleListTitleOf?.(task.googleListId)}
             simple
           />
         ))}
@@ -70,6 +82,9 @@ export function QuadrantColumn({
   onEdit,
   onDelete,
   onStatusToggle,
+  onAddChild,
+  childrenOf,
+  googleListTitleOf,
   simple,
   matrix,
   onPlotRef,
@@ -135,6 +150,9 @@ export function QuadrantColumn({
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onStatusToggle={onStatusToggle}
+                  onAddChild={onAddChild}
+                  childrenOf={childrenOf}
+                  googleListTitleOf={googleListTitleOf}
                 />
               </div>
             ))}
@@ -149,6 +167,9 @@ export function QuadrantColumn({
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onStatusToggle={onStatusToggle}
+                onAddChild={onAddChild}
+                children={childrenOf?.(task.id) ?? []}
+                googleListTitle={googleListTitleOf?.(task.googleListId)}
                 simple={simple}
               />
             ))}
@@ -177,6 +198,9 @@ export function QuadrantColumn({
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onStatusToggle={onStatusToggle}
+                onAddChild={onAddChild}
+                children={childrenOf?.(task.id) ?? []}
+                googleListTitle={googleListTitleOf?.(task.googleListId)}
                 simple={simple || matrix}
               />
             ))}

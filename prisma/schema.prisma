@@ -94,17 +94,21 @@ model Task {
   dueDate          DateTime?
   googleTaskId     String?
   googleListId     String?
+  parentId         String?
   notifyAt         DateTime?
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
 
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   notifications Notification[]
+  parent        Task?          @relation("TaskTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children      Task[]         @relation("TaskTree")
 
   @@index([userId])
   @@index([userId, quadrant])
   @@index([userId, status])
   @@index([googleTaskId])
+  @@index([parentId])
 }
 
 enum NotificationType {
